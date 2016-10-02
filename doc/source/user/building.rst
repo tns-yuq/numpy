@@ -4,7 +4,7 @@ Building from source
 ====================
 
 A general overview of building NumPy from source is given here, with detailed
-instructions for specific platforms given seperately.
+instructions for specific platforms given separately.
 
 Prerequisites
 -------------
@@ -45,6 +45,12 @@ Building NumPy requires the following software installed:
    can be used, including optimized LAPACK libraries such as ATLAS, MKL or the
    Accelerate/vecLib framework on OS X.
 
+4) Cython
+
+   To build development versions of NumPy, you'll need a recent version of
+   Cython.  Released NumPy sources on PyPi include the C files generated from
+   Cython code, so for released versions having Cython installed isn't needed.
+
 Basic Installation
 ------------------
 
@@ -56,9 +62,9 @@ To perform an in-place build that can be run from the source folder run::
 
     python setup.py build_ext --inplace
 
-The NumPy build system uses ``distutils`` and ``numpy.distutils``.
-``setuptools`` is only used when building via ``pip`` or with ``python
-setupegg.py``.  Using ``virtualenv`` should work as expected.
+The NumPy build system uses ``setuptools`` (from numpy 1.11.0, before that it
+was plain ``distutils``) and ``numpy.distutils``.
+Using ``virtualenv`` should work as expected.
 
 *Note: for build instructions to do development work on NumPy itself, see*
 :ref:`development-environment`.
@@ -95,10 +101,6 @@ where different FORTRAN compilers might have been used.
 Choosing the fortran compiler
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-To build with g77::
-
-    python setup.py build --fcompiler=gnu
-
 To build with gfortran::
 
     python setup.py build --fcompiler=gnu95
@@ -119,7 +121,7 @@ is almost always a very bad idea.
 Disabling ATLAS and other accelerated libraries
 -----------------------------------------------
 
-Usage of ATLAS and other accelerated libraries in Numpy can be disabled
+Usage of ATLAS and other accelerated libraries in NumPy can be disabled
 via::
 
     BLAS=None LAPACK=None ATLAS=None python setup.py build

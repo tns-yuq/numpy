@@ -268,7 +268,7 @@ From scratch
 
 .. c:function:: PyObject* PyArray_SimpleNew(int nd, npy_intp* dims, int typenum)
 
-    Create a new unitialized array of type, *typenum*, whose size in
+    Create a new uninitialized array of type, *typenum*, whose size in
     each of *nd* dimensions is given by the integer array, *dims*.
     This function cannot be used to create a flexible-type array (no
     itemsize given).
@@ -421,7 +421,7 @@ From other objects
 
         Force a cast to the output type even if it cannot be done
         safely.  Without this flag, a data cast will occur only if it
-        can be done safely, otherwise an error is reaised.
+        can be done safely, otherwise an error is raised.
 
     .. c:var:: NPY_ARRAY_UPDATEIFCOPY
 
@@ -2291,7 +2291,7 @@ an element copier function as a primitive.::
 Array Iterators
 ---------------
 
-As of Numpy 1.6, these array iterators are superceded by
+As of NumPy 1.6.0, these array iterators are superceded by
 the new array iterator, :c:type:`NpyIter`.
 
 An array iterator is a simple way to access the elements of an

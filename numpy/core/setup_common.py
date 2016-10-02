@@ -36,6 +36,7 @@ C_ABI_VERSION = 0x01000009
 # 0x00000009 - 1.8.x
 # 0x00000009 - 1.9.x
 # 0x0000000a - 1.10.x
+# 0x0000000a - 1.11.x
 C_API_VERSION = 0x0000000a
 
 class MismatchCAPIWarning(Warning):
@@ -93,7 +94,7 @@ def check_api_version(apiversion, codegen_dir):
                )
         warnings.warn(msg % (apiversion, curapi_hash, apiversion, api_hash,
                              __file__),
-                      MismatchCAPIWarning)
+                      MismatchCAPIWarning, stacklevel=2)
 # Mandatory functions: if not found, fail the build
 MANDATORY_FUNCS = ["sin", "cos", "tan", "sinh", "cosh", "tanh", "fabs",
         "floor", "ceil", "sqrt", "log10", "log", "exp", "asin",
@@ -124,6 +125,7 @@ OPTIONAL_INTRINSICS = [("__builtin_isnan", '5.'),
                        ("__builtin_bswap64", '5u'),
                        ("__builtin_expect", '5, 0'),
                        ("__builtin_mul_overflow", '5, 5, (int*)5'),
+                       ("__builtin_cpu_supports", '"sse"'),
                        ("_mm_load_ps", '(float*)0', "xmmintrin.h"),  # SSE
                        ("_mm_prefetch", '(float*)0, _MM_HINT_NTA',
                         "xmmintrin.h"),  # SSE
@@ -140,6 +142,10 @@ OPTIONAL_FUNCTION_ATTRIBUTES = [('__attribute__((optimize("unroll-loops")))',
                                  'attribute_optimize_opt_3'),
                                 ('__attribute__((nonnull (1)))',
                                  'attribute_nonnull'),
+                                ('__attribute__((target ("avx")))',
+                                 'attribute_target_avx'),
+                                ('__attribute__((target ("avx2")))',
+                                 'attribute_target_avx2'),
                                 ]
 
 # variable attributes tested via "int %s a" % attribute

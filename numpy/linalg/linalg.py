@@ -23,7 +23,7 @@ from numpy.core import (
     csingle, cdouble, inexact, complexfloating, newaxis, ravel, all, Inf, dot,
     add, multiply, sqrt, maximum, fastCopyAndTranspose, sum, isfinite, size,
     finfo, errstate, geterrobj, longdouble, rollaxis, amin, amax, product, abs,
-    broadcast, atleast_2d, intp, asanyarray, isscalar
+    broadcast, atleast_2d, intp, asanyarray, isscalar, object_
     )
 from numpy.lib import triu, asfarray
 from numpy.linalg import lapack_lite, _umath_linalg
@@ -677,7 +677,7 @@ def qr(a, mode='reduced'):
     `a` is of type `matrix`, all the return values will be matrices too.
 
     New 'reduced', 'complete', and 'raw' options for mode were added in
-    Numpy 1.8 and the old option 'full' was made an alias of 'reduced'.  In
+    NumPy 1.8.0 and the old option 'full' was made an alias of 'reduced'.  In
     addition the options 'full' and 'economic' were deprecated.  Because
     'full' was the previous default and 'reduced' is the new default,
     backward compatibility can be maintained by letting `mode` default.
@@ -737,12 +737,12 @@ def qr(a, mode='reduced'):
             msg = "".join((
                     "The 'full' option is deprecated in favor of 'reduced'.\n",
                     "For backward compatibility let mode default."))
-            warnings.warn(msg, DeprecationWarning)
+            warnings.warn(msg, DeprecationWarning, stacklevel=2)
             mode = 'reduced'
         elif mode in ('e', 'economic'):
             # 2013-04-01, 1.8
             msg = "The 'economic' option is deprecated.",
-            warnings.warn(msg, DeprecationWarning)
+            warnings.warn(msg, DeprecationWarning, stacklevel=2)
             mode = 'economic'
         else:
             raise ValueError("Unrecognized mode '%s'" % mode)
@@ -1666,7 +1666,7 @@ def slogdet(a):
     Broadcasting rules apply, see the `numpy.linalg` documentation for
     details.
 
-    .. versionadded:: 1.6.0.
+    .. versionadded:: 1.6.0
 
     The determinant is computed via LU factorization using the LAPACK
     routine z/dgetrf.
@@ -1804,8 +1804,9 @@ def lstsq(a, b, rcond=-1):
         of `b`.
     rcond : float, optional
         Cut-off ratio for small singular values of `a`.
-        Singular values are set to zero if they are smaller than `rcond`
-        times the largest singular value of `a`.
+        For the purposes of rank determination, singular values are treated
+        as zero if they are smaller than `rcond` times the largest singular
+        value of `a`.
 
     Returns
     -------
@@ -2060,22 +2061,22 @@ def norm(x, ord=None, axis=None, keepdims=False):
     >>> LA.norm(b, 'fro')
     7.745966692414834
     >>> LA.norm(a, np.inf)
-    4
+    4.0
     >>> LA.norm(b, np.inf)
-    9
+    9.0
     >>> LA.norm(a, -np.inf)
-    0
+    0.0
     >>> LA.norm(b, -np.inf)
-    2
+    2.0
 
     >>> LA.norm(a, 1)
-    20
+    20.0
     >>> LA.norm(b, 1)
-    7
+    7.0
     >>> LA.norm(a, -1)
     -4.6566128774142013e-010
     >>> LA.norm(b, -1)
-    6
+    6.0
     >>> LA.norm(a, 2)
     7.745966692414834
     >>> LA.norm(b, 2)
@@ -2099,7 +2100,7 @@ def norm(x, ord=None, axis=None, keepdims=False):
     >>> LA.norm(c, axis=1)
     array([ 3.74165739,  4.24264069])
     >>> LA.norm(c, ord=1, axis=1)
-    array([6, 6])
+    array([ 6.,  6.])
 
     Using the `axis` argument to compute matrix norms:
 
@@ -2111,6 +2112,9 @@ def norm(x, ord=None, axis=None, keepdims=False):
 
     """
     x = asarray(x)
+
+    if not issubclass(x.dtype.type, (inexact, object_)):
+        x = x.astype(float)
 
     # Immediately handle some default, simple, fast, and common cases.
     if axis is None:
@@ -2147,7 +2151,7 @@ def norm(x, ord=None, axis=None, keepdims=False):
             return abs(x).min(axis=axis, keepdims=keepdims)
         elif ord == 0:
             # Zero norm
-            return (x != 0).sum(axis=axis, keepdims=keepdims)
+            return (x != 0).astype(float).sum(axis=axis, keepdims=keepdims)
         elif ord == 1:
             # special case for speedup
             return add.reduce(abs(x), axis=axis, keepdims=keepdims)
@@ -2343,12 +2347,12 @@ def _multi_dot_three(A, B, C):
     than `_multi_dot_matrix_chain_order`
 
     """
-    # cost1 = cost((AB)C)
-    cost1 = (A.shape[0] * A.shape[1] * B.shape[1] +  # (AB)
-             A.shape[0] * B.shape[1] * C.shape[1])   # (--)C
-    # cost2 = cost((AB)C)
-    cost2 = (B.shape[0] * B.shape[1] * C.shape[1] +  #  (BC)
-             A.shape[0] * A.shape[1] * C.shape[1])   # A(--)
+    a0, a1b0 = A.shape
+    b1c0, c1 = C.shape
+    # cost1 = cost((AB)C) = a0*a1b0*b1c0 + a0*b1c0*c1
+    cost1 = a0 * b1c0 * (a1b0 + c1)
+    # cost2 = cost(A(BC)) = a1b0*b1c0*c1 + a0*a1b0*c1
+    cost2 = a1b0 * c1 * (a0 + b1c0)
 
     if cost1 < cost2:
         return dot(dot(A, B), C)

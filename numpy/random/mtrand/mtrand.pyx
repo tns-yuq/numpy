@@ -22,7 +22,11 @@
 # SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 include "Python.pxi"
+include "randint_helpers.pxi"
 include "numpy.pxd"
+include "cpython/pycapsule.pxd"
+
+from libc cimport string
 
 cdef extern from "math.h":
     double exp(double x)
@@ -156,7 +160,9 @@ cdef object cont0_array(rk_state *state, rk_cont0 func, object size,
     cdef npy_intp i
 
     if size is None:
-        return func(state)
+        with lock, nogil:
+            rv = func(state)
+        return rv
     else:
         array = <ndarray>np.empty(size, np.float64)
         length = PyArray_SIZE(array)
@@ -175,7 +181,9 @@ cdef object cont1_array_sc(rk_state *state, rk_cont1 func, object size, double a
     cdef npy_intp i
 
     if size is None:
-        return func(state, a)
+        with lock, nogil:
+            rv = func(state, a)
+        return rv
     else:
         array = <ndarray>np.empty(size, np.float64)
         length = PyArray_SIZE(array)
@@ -227,7 +235,9 @@ cdef object cont2_array_sc(rk_state *state, rk_cont2 func, object size, double a
     cdef npy_intp i
 
     if size is None:
-        return func(state, a, b)
+        with lock, nogil:
+            rv = func(state, a, b)
+        return rv
     else:
         array = <ndarray>np.empty(size, np.float64)
         length = PyArray_SIZE(array)
@@ -248,28 +258,23 @@ cdef object cont2_array(rk_state *state, rk_cont2 func, object size,
     cdef broadcast multi
 
     if size is None:
-        multi = <broadcast> PyArray_MultiIterNew(2, <void *>oa, <void *>ob)
-        array = <ndarray> PyArray_SimpleNew(multi.nd, multi.dimensions, NPY_DOUBLE)
-        array_data = <double *>PyArray_DATA(array)
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                oa_data = <double *>PyArray_MultiIter_DATA(multi, 0)
-                ob_data = <double *>PyArray_MultiIter_DATA(multi, 1)
-                array_data[i] = func(state, oa_data[0], ob_data[0])
-                PyArray_MultiIter_NEXT(multi)
+        multi = <broadcast>np.broadcast(oa, ob)
+        array = <ndarray>np.empty(multi.shape, dtype=np.float64)
     else:
-        array = <ndarray>np.empty(size, np.float64)
-        array_data = <double *>PyArray_DATA(array)
-        multi = <broadcast>PyArray_MultiIterNew(3, <void*>array, <void *>oa, <void *>ob)
-        if (multi.size != PyArray_SIZE(array)):
+        array = <ndarray>np.empty(size, dtype=np.float64)
+        multi = <broadcast>np.broadcast(oa, ob, array)
+        if multi.shape != array.shape:
             raise ValueError("size is not compatible with inputs")
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                oa_data = <double *>PyArray_MultiIter_DATA(multi, 1)
-                ob_data = <double *>PyArray_MultiIter_DATA(multi, 2)
-                array_data[i] = func(state, oa_data[0], ob_data[0])
-                PyArray_MultiIter_NEXTi(multi, 1)
-                PyArray_MultiIter_NEXTi(multi, 2)
+
+    array_data = <double *>PyArray_DATA(array)
+
+    with lock, nogil:
+        for i in range(multi.size):
+            oa_data = <double *>PyArray_MultiIter_DATA(multi, 0)
+            ob_data = <double *>PyArray_MultiIter_DATA(multi, 1)
+            array_data[i] = func(state, oa_data[0], ob_data[0])
+            PyArray_MultiIter_NEXT(multi)
+
     return array
 
 cdef object cont3_array_sc(rk_state *state, rk_cont3 func, object size, double a,
@@ -281,7 +286,9 @@ cdef object cont3_array_sc(rk_state *state, rk_cont3 func, object size, double a
     cdef npy_intp i
 
     if size is None:
-        return func(state, a, b, c)
+        with lock, nogil:
+            rv = func(state, a, b, c)
+        return rv
     else:
         array = <ndarray>np.empty(size, np.float64)
         length = PyArray_SIZE(array)
@@ -303,30 +310,24 @@ cdef object cont3_array(rk_state *state, rk_cont3 func, object size,
     cdef broadcast multi
 
     if size is None:
-        multi = <broadcast> PyArray_MultiIterNew(3, <void *>oa, <void *>ob, <void *>oc)
-        array = <ndarray> PyArray_SimpleNew(multi.nd, multi.dimensions, NPY_DOUBLE)
-        array_data = <double *>PyArray_DATA(array)
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                oa_data = <double *>PyArray_MultiIter_DATA(multi, 0)
-                ob_data = <double *>PyArray_MultiIter_DATA(multi, 1)
-                oc_data = <double *>PyArray_MultiIter_DATA(multi, 2)
-                array_data[i] = func(state, oa_data[0], ob_data[0], oc_data[0])
-                PyArray_MultiIter_NEXT(multi)
+        multi = <broadcast>np.broadcast(oa, ob, oc)
+        array = <ndarray>np.empty(multi.shape, dtype=np.float64)
     else:
-        array = <ndarray>np.empty(size, np.float64)
-        array_data = <double *>PyArray_DATA(array)
-        multi = <broadcast>PyArray_MultiIterNew(4, <void*>array, <void *>oa,
-                                                <void *>ob, <void *>oc)
-        if (multi.size != PyArray_SIZE(array)):
+        array = <ndarray>np.empty(size, dtype=np.float64)
+        multi = <broadcast>np.broadcast(oa, ob, oc, array)
+        if multi.shape != array.shape:
             raise ValueError("size is not compatible with inputs")
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                oa_data = <double *>PyArray_MultiIter_DATA(multi, 1)
-                ob_data = <double *>PyArray_MultiIter_DATA(multi, 2)
-                oc_data = <double *>PyArray_MultiIter_DATA(multi, 3)
-                array_data[i] = func(state, oa_data[0], ob_data[0], oc_data[0])
-                PyArray_MultiIter_NEXT(multi)
+
+    array_data = <double *>PyArray_DATA(array)
+
+    with lock, nogil:
+        for i in range(multi.size):
+            oa_data = <double *>PyArray_MultiIter_DATA(multi, 0)
+            ob_data = <double *>PyArray_MultiIter_DATA(multi, 1)
+            oc_data = <double *>PyArray_MultiIter_DATA(multi, 2)
+            array_data[i] = func(state, oa_data[0], ob_data[0], oc_data[0])
+            PyArray_MultiIter_NEXT(multi)
+
     return array
 
 cdef object disc0_array(rk_state *state, rk_disc0 func, object size, object lock):
@@ -336,7 +337,9 @@ cdef object disc0_array(rk_state *state, rk_disc0 func, object size, object lock
     cdef npy_intp i
 
     if size is None:
-        return func(state)
+        with lock, nogil:
+            rv = func(state)
+        return rv
     else:
         array = <ndarray>np.empty(size, int)
         length = PyArray_SIZE(array)
@@ -354,7 +357,9 @@ cdef object discnp_array_sc(rk_state *state, rk_discnp func, object size,
     cdef npy_intp i
 
     if size is None:
-        return func(state, n, p)
+        with lock, nogil:
+            rv = func(state, n, p)
+        return rv
     else:
         array = <ndarray>np.empty(size, int)
         length = PyArray_SIZE(array)
@@ -374,28 +379,22 @@ cdef object discnp_array(rk_state *state, rk_discnp func, object size,
     cdef broadcast multi
 
     if size is None:
-        multi = <broadcast> PyArray_MultiIterNew(2, <void *>on, <void *>op)
-        array = <ndarray> PyArray_SimpleNew(multi.nd, multi.dimensions, NPY_LONG)
-        array_data = <long *>PyArray_DATA(array)
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                on_data = <long *>PyArray_MultiIter_DATA(multi, 0)
-                op_data = <double *>PyArray_MultiIter_DATA(multi, 1)
-                array_data[i] = func(state, on_data[0], op_data[0])
-                PyArray_MultiIter_NEXT(multi)
+        multi = <broadcast>np.broadcast(on, op)
+        array = <ndarray>np.empty(multi.shape, dtype=int)
     else:
-        array = <ndarray>np.empty(size, int)
-        array_data = <long *>PyArray_DATA(array)
-        multi = <broadcast>PyArray_MultiIterNew(3, <void*>array, <void *>on, <void *>op)
-        if (multi.size != PyArray_SIZE(array)):
+        array = <ndarray>np.empty(size, dtype=int)
+        multi = <broadcast>np.broadcast(on, op, array)
+        if multi.shape != array.shape:
             raise ValueError("size is not compatible with inputs")
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                on_data = <long *>PyArray_MultiIter_DATA(multi, 1)
-                op_data = <double *>PyArray_MultiIter_DATA(multi, 2)
-                array_data[i] = func(state, on_data[0], op_data[0])
-                PyArray_MultiIter_NEXTi(multi, 1)
-                PyArray_MultiIter_NEXTi(multi, 2)
+
+    array_data = <long *>PyArray_DATA(array)
+
+    with lock, nogil:
+        for i in range(multi.size):
+            on_data = <long *>PyArray_MultiIter_DATA(multi, 0)
+            op_data = <double *>PyArray_MultiIter_DATA(multi, 1)
+            array_data[i] = func(state, on_data[0], op_data[0])
+            PyArray_MultiIter_NEXT(multi)
 
     return array
 
@@ -407,7 +406,9 @@ cdef object discdd_array_sc(rk_state *state, rk_discdd func, object size,
     cdef npy_intp i
 
     if size is None:
-        return func(state, n, p)
+        with lock, nogil:
+            rv = func(state, n, p)
+        return rv
     else:
         array = <ndarray>np.empty(size, int)
         length = PyArray_SIZE(array)
@@ -427,28 +428,22 @@ cdef object discdd_array(rk_state *state, rk_discdd func, object size,
     cdef broadcast multi
 
     if size is None:
-        multi = <broadcast> PyArray_MultiIterNew(2, <void *>on, <void *>op)
-        array = <ndarray> PyArray_SimpleNew(multi.nd, multi.dimensions, NPY_LONG)
-        array_data = <long *>PyArray_DATA(array)
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                on_data = <double *>PyArray_MultiIter_DATA(multi, 0)
-                op_data = <double *>PyArray_MultiIter_DATA(multi, 1)
-                array_data[i] = func(state, on_data[0], op_data[0])
-                PyArray_MultiIter_NEXT(multi)
+        multi = <broadcast>np.broadcast(on, op)
+        array = <ndarray>np.empty(multi.shape, dtype=int)
     else:
-        array = <ndarray>np.empty(size, int)
-        array_data = <long *>PyArray_DATA(array)
-        multi = <broadcast>PyArray_MultiIterNew(3, <void*>array, <void *>on, <void *>op)
-        if (multi.size != PyArray_SIZE(array)):
+        array = <ndarray>np.empty(size, dtype=int)
+        multi = <broadcast>np.broadcast(on, op, array)
+        if multi.shape != array.shape:
             raise ValueError("size is not compatible with inputs")
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                on_data = <double *>PyArray_MultiIter_DATA(multi, 1)
-                op_data = <double *>PyArray_MultiIter_DATA(multi, 2)
-                array_data[i] = func(state, on_data[0], op_data[0])
-                PyArray_MultiIter_NEXTi(multi, 1)
-                PyArray_MultiIter_NEXTi(multi, 2)
+
+    array_data = <long *>PyArray_DATA(array)
+
+    with lock, nogil:
+        for i in range(multi.size):
+            on_data = <double *>PyArray_MultiIter_DATA(multi, 0)
+            op_data = <double *>PyArray_MultiIter_DATA(multi, 1)
+            array_data[i] = func(state, on_data[0], op_data[0])
+            PyArray_MultiIter_NEXT(multi)
 
     return array
 
@@ -460,7 +455,9 @@ cdef object discnmN_array_sc(rk_state *state, rk_discnmN func, object size,
     cdef npy_intp i
 
     if size is None:
-        return func(state, n, m, N)
+        with lock, nogil:
+            rv = func(state, n, m, N)
+        return rv
     else:
         array = <ndarray>np.empty(size, int)
         length = PyArray_SIZE(array)
@@ -481,30 +478,23 @@ cdef object discnmN_array(rk_state *state, rk_discnmN func, object size,
     cdef broadcast multi
 
     if size is None:
-        multi = <broadcast> PyArray_MultiIterNew(3, <void *>on, <void *>om, <void *>oN)
-        array = <ndarray> PyArray_SimpleNew(multi.nd, multi.dimensions, NPY_LONG)
-        array_data = <long *>PyArray_DATA(array)
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                on_data = <long *>PyArray_MultiIter_DATA(multi, 0)
-                om_data = <long *>PyArray_MultiIter_DATA(multi, 1)
-                oN_data = <long *>PyArray_MultiIter_DATA(multi, 2)
-                array_data[i] = func(state, on_data[0], om_data[0], oN_data[0])
-                PyArray_MultiIter_NEXT(multi)
+        multi = <broadcast>np.broadcast(on, om, oN)
+        array = <ndarray>np.empty(multi.shape, dtype=int)
     else:
-        array = <ndarray>np.empty(size, int)
-        array_data = <long *>PyArray_DATA(array)
-        multi = <broadcast>PyArray_MultiIterNew(4, <void*>array, <void *>on, <void *>om,
-                                                <void *>oN)
-        if (multi.size != PyArray_SIZE(array)):
+        array = <ndarray>np.empty(size, dtype=int)
+        multi = <broadcast>np.broadcast(on, om, oN, array)
+        if multi.shape != array.shape:
             raise ValueError("size is not compatible with inputs")
-        with lock, nogil:
-            for i from 0 <= i < multi.size:
-                on_data = <long *>PyArray_MultiIter_DATA(multi, 1)
-                om_data = <long *>PyArray_MultiIter_DATA(multi, 2)
-                oN_data = <long *>PyArray_MultiIter_DATA(multi, 3)
-                array_data[i] = func(state, on_data[0], om_data[0], oN_data[0])
-                PyArray_MultiIter_NEXT(multi)
+
+    array_data = <long *>PyArray_DATA(array)
+
+    with lock, nogil:
+        for i in range(multi.size):
+            on_data = <long *>PyArray_MultiIter_DATA(multi, 0)
+            om_data = <long *>PyArray_MultiIter_DATA(multi, 1)
+            oN_data = <long *>PyArray_MultiIter_DATA(multi, 2)
+            array_data[i] = func(state, on_data[0], om_data[0], oN_data[0])
+            PyArray_MultiIter_NEXT(multi)
 
     return array
 
@@ -516,7 +506,9 @@ cdef object discd_array_sc(rk_state *state, rk_discd func, object size,
     cdef npy_intp i
 
     if size is None:
-        return func(state, a)
+        with lock, nogil:
+            rv = func(state, a)
+        return rv
     else:
         array = <ndarray>np.empty(size, int)
         length = PyArray_SIZE(array)
@@ -581,283 +573,6 @@ def _shape_from_size(size, d):
            shape = tuple(size) + (d,)
     return shape
 
-
-# Set up dictionary of integer types and relevant functions.
-#
-# The dictionary is keyed by dtype(...).name and the values
-# are a tuple (low, high, function), where low and high are
-# the bounds of the largest half open interval `[low, high)`
-# and the function is the relevant function to call for
-# that precision.
-#
-# The functions are all the same except for changed types in
-# a few places. It would be easy to template them.
-
-def _rand_bool(low, high, size, rngstate):
-    """
-    _rand_bool(low, high, size, rngstate)
-
-    See `_rand_int32` for documentation, only the return type changes.
-
-    """
-    cdef npy_bool off, rng, buf
-    cdef npy_bool *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_bool>(high - low)
-    off = <npy_bool>(low)
-    if size is None:
-        rk_random_bool(off, rng, 1, &buf, state)
-        return buf
-    else:
-        array = <ndarray>np.empty(size, np.bool_)
-        cnt = PyArray_SIZE(array)
-        out = <npy_bool *>PyArray_DATA(array)
-        with nogil:
-            rk_random_bool(off, rng, cnt, out, state)
-        return array
-
-
-def _rand_int8(low, high, size, rngstate):
-    """
-    _rand_int8(low, high, size, rngstate)
-
-    See `_rand_int32` for documentation, only the return type changes.
-
-    """
-    cdef npy_uint8 off, rng, buf
-    cdef npy_uint8 *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_uint8>(high - low)
-    off = <npy_uint8>(<npy_int8>low)
-    if size is None:
-        rk_random_uint8(off, rng, 1, &buf, state)
-        return <npy_int8>buf
-    else:
-        array = <ndarray>np.empty(size, np.int8)
-        cnt = PyArray_SIZE(array)
-        out = <npy_uint8 *>PyArray_DATA(array)
-        with nogil:
-            rk_random_uint8(off, rng, cnt, out, state)
-        return array
-
-
-def _rand_int16(low, high, size, rngstate):
-    """
-    _rand_int16(low, high, size, rngstate)
-
-    See `_rand_int32` for documentation, only the return type changes.
-
-    """
-    cdef npy_uint16 off, rng, buf
-    cdef npy_uint16 *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_uint16>(high - low)
-    off = <npy_uint16>(<npy_int16>low)
-    if size is None:
-        rk_random_uint16(off, rng, 1, &buf, state)
-        return <npy_int16>buf
-    else:
-        array = <ndarray>np.empty(size, np.int16)
-        cnt = PyArray_SIZE(array)
-        out = <npy_uint16 *>PyArray_DATA(array)
-        with nogil:
-            rk_random_uint16(off, rng, cnt, out, state)
-        return array
-
-
-def _rand_int32(low, high, size, rngstate):
-    """
-    _rand_int32(self, low, high, size, rngstate)
-
-    Return random np.int32 integers between `low` and `high`, inclusive.
-
-    Return random integers from the "discrete uniform" distribution in the
-    closed interval [`low`, `high`]. On entry the arguments are presumed
-    to have been validated for size and order for the np.int32 type.
-
-    Parameters
-    ----------
-    low : int
-        Lowest (signed) integer to be drawn from the distribution.
-    high : int
-        Highest (signed) integer to be drawn from the distribution.
-    size : int or tuple of ints
-        Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-        ``m * n * k`` samples are drawn.  Default is None, in which case a
-        single value is returned.
-    rngstate : encapsulated pointer to rk_state
-        The specific type depends on the python version. In Python 2 it is
-        a PyCObject, in Python 3 a PyCapsule object.
-
-    Returns
-    -------
-    out : python scalar or ndarray of np.int32
-          `size`-shaped array of random integers from the appropriate
-          distribution, or a single such random int if `size` not provided.
-
-    """
-    cdef npy_uint32 off, rng, buf
-    cdef npy_uint32 *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_uint32>(high - low)
-    off = <npy_uint32>(<npy_int32>low)
-    if size is None:
-        rk_random_uint32(off, rng, 1, &buf, state)
-        return <npy_int32>buf
-    else:
-        array = <ndarray>np.empty(size, np.int32)
-        cnt = PyArray_SIZE(array)
-        out = <npy_uint32 *>PyArray_DATA(array)
-        with nogil:
-            rk_random_uint32(off, rng, cnt, out, state)
-        return array
-
-
-def _rand_int64(low, high, size, rngstate):
-    """
-    _rand_int64(low, high, size, rngstate)
-
-    See `_rand_int32` for documentation, only the return type changes.
-
-    """
-    cdef npy_uint64 off, rng, buf
-    cdef npy_uint64 *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_uint64>(high - low)
-    off = <npy_uint64>(<npy_int64>low)
-    if size is None:
-        rk_random_uint64(off, rng, 1, &buf, state)
-        return <npy_int64>buf
-    else:
-        array = <ndarray>np.empty(size, np.int64)
-        cnt = PyArray_SIZE(array)
-        out = <npy_uint64 *>PyArray_DATA(array)
-        with nogil:
-            rk_random_uint64(off, rng, cnt, out, state)
-        return array
-
-def _rand_uint8(low, high, size, rngstate):
-    """
-    _rand_uint8(low, high, size, rngstate)
-
-    See `_rand_int32` for documentation, only the return type changes.
-
-    """
-    cdef npy_uint8 off, rng, buf
-    cdef npy_uint8 *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_uint8>(high - low)
-    off = <npy_uint8>(low)
-    if size is None:
-        rk_random_uint8(off, rng, 1, &buf, state)
-        return buf
-    else:
-        array = <ndarray>np.empty(size, np.uint8)
-        cnt = PyArray_SIZE(array)
-        out = <npy_uint8 *>PyArray_DATA(array)
-        with nogil:
-            rk_random_uint8(off, rng, cnt, out, state)
-        return array
-
-
-def _rand_uint16(low, high, size, rngstate):
-    """
-    _rand_uint16(low, high, size, rngstate)
-
-    See `_rand_int32` for documentation, only the return type changes.
-
-    """
-    cdef npy_uint16 off, rng, buf
-    cdef npy_uint16 *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_uint16>(high - low)
-    off = <npy_uint16>(low)
-    if size is None:
-        rk_random_uint16(off, rng, 1, &buf, state)
-        return buf
-    else:
-        array = <ndarray>np.empty(size, np.uint16)
-        cnt = PyArray_SIZE(array)
-        out = <npy_uint16 *>PyArray_DATA(array)
-        with nogil:
-            rk_random_uint16(off, rng, cnt, out, state)
-        return array
-
-
-def _rand_uint32(low, high, size, rngstate):
-    """
-    _rand_uint32(self, low, high, size, rngstate)
-
-    See `_rand_int32` for documentation, only the return type changes.
-
-    """
-    cdef npy_uint32 off, rng, buf
-    cdef npy_uint32 *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_uint32>(high - low)
-    off = <npy_uint32>(low)
-    if size is None:
-        rk_random_uint32(off, rng, 1, &buf, state)
-        return <npy_uint32>buf
-    else:
-        array = <ndarray>np.empty(size, np.uint32)
-        cnt = PyArray_SIZE(array)
-        out = <npy_uint32 *>PyArray_DATA(array)
-        with nogil:
-            rk_random_uint32(off, rng, cnt, out, state)
-        return array
-
-
-def _rand_uint64(low, high, size, rngstate):
-    """
-    _rand_uint64(low, high, size, rngstate)
-
-    See `_rand_int32` for documentation, only the return type changes.
-
-    """
-    cdef npy_uint64 off, rng, buf
-    cdef npy_uint64 *out
-    cdef ndarray array "arrayObject"
-    cdef npy_intp cnt
-    cdef rk_state *state = <rk_state *>NpyCapsule_AsVoidPtr(rngstate)
-
-    rng = <npy_uint64>(high - low)
-    off = <npy_uint64>(low)
-    if size is None:
-        rk_random_uint64(off, rng, 1, &buf, state)
-        return <npy_uint64>buf
-    else:
-        array = <ndarray>np.empty(size, np.uint64)
-        cnt = PyArray_SIZE(array)
-        out = <npy_uint64 *>PyArray_DATA(array)
-        with nogil:
-            rk_random_uint64(off, rng, cnt, out, state)
-        return array
-
 # Look up table for randint functions keyed by type name. The stored data
 # is a tuple (lbnd, ubnd, func), where lbnd is the smallest value for the
 # type, ubnd is one greater than the largest value, and func is the
@@ -901,10 +616,10 @@ cdef class RandomState:
     Parameters
     ----------
     seed : {None, int, array_like}, optional
-        Random seed initializing the pseudo-random number generator.
-        Can be an integer, an array (or other sequence) of integers of
-        any length, or ``None`` (the default).
-        If `seed` is ``None``, then `RandomState` will try to read data from
+        Random seed used to initialize the pseudo-random number generator.  Can
+        be any integer between 0 and 2**32 - 1 inclusive, an array (or other
+        sequence) of such integers, or ``None`` (the default).  If `seed` is
+        ``None``, then `RandomState` will try to read data from
         ``/dev/urandom`` (or the Windows analogue) if available or seed from
         the clock otherwise.
 
@@ -924,7 +639,7 @@ cdef class RandomState:
 
     def __init__(self, seed=None):
         self.internal_state = <rk_state*>PyMem_Malloc(sizeof(rk_state))
-        self.state_address = NpyCapsule_FromVoidPtr(self.internal_state, NULL)
+        self.state_address = PyCapsule_New(self.internal_state, NULL, NULL)
         self.lock = Lock()
         self.seed(seed)
 
@@ -962,13 +677,13 @@ cdef class RandomState:
             else:
                 idx = operator.index(seed)
                 if idx > int(2**32 - 1) or idx < 0:
-                    raise ValueError("Seed must be between 0 and 4294967295")
+                    raise ValueError("Seed must be between 0 and 2**32 - 1")
                 with self.lock:
                     rk_seed(idx, self.internal_state)
         except TypeError:
             obj = np.asarray(seed).astype(np.int64, casting='safe')
             if ((obj > int(2**32 - 1)) | (obj < 0)).any():
-                raise ValueError("Seed must be between 0 and 4294967295")
+                raise ValueError("Seed must be between 0 and 2**32 - 1")
             obj = obj.astype('L', casting='unsafe')
             with self.lock:
                 init_by_array(self.internal_state, <unsigned long *>PyArray_DATA(obj),
@@ -1187,7 +902,7 @@ cdef class RandomState:
         """
         return disc0_array(self.internal_state, rk_long, size, self.lock)
 
-    def randint(self, low, high=None, size=None, dtype='l'):
+    def randint(self, low, high=None, size=None, dtype=int):
         """
         randint(low, high=None, size=None, dtype='l')
 
@@ -1214,7 +929,7 @@ cdef class RandomState:
             Desired dtype of the result. All dtypes are determined by their
             name, i.e., 'int64', 'int', etc, so byteorder is not available
             and a specific precision may have different C types depending
-            on the platform. The default value is 'l' (C long).
+            on the platform. The default value is 'np.int'.
 
             .. versionadded:: 1.11.0
 
@@ -1262,7 +977,13 @@ cdef class RandomState:
             raise ValueError("low >= high")
 
         with self.lock:
-            return randfunc(low, high - 1, size, self.state_address)
+            ret = randfunc(low, high - 1, size, self.state_address)
+
+            if size is None:
+                if dtype in (np.bool, np.int, np.long):
+                    return dtype(ret)
+
+            return ret
 
     def bytes(self, npy_intp length):
         """
@@ -1488,21 +1209,22 @@ cdef class RandomState:
 
         Parameters
         ----------
-        low : float, optional
+        low : float or array_like of floats, optional
             Lower boundary of the output interval.  All values generated will be
             greater than or equal to low.  The default value is 0.
-        high : float
+        high : float or array_like of floats
             Upper boundary of the output interval.  All values generated will be
             less than high.  The default value is 1.0.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``low`` and ``high`` are both scalars.
+            Otherwise, ``np.broadcast(low, high).size`` samples are drawn.
 
         Returns
         -------
-        out : ndarray
-            Drawn samples, with shape `size`.
+        out : ndarray or scalar
+            Drawn samples from the parameterized uniform distribution.
 
         See Also
         --------
@@ -1522,6 +1244,12 @@ cdef class RandomState:
         .. math:: p(x) = \\frac{1}{b - a}
 
         anywhere within the interval ``[a, b)``, and zero elsewhere.
+
+        When ``high`` == ``low``, values of ``low`` will be returned.
+        If ``high`` < ``low``, the results are officially undefined
+        and may eventually raise an error, i.e. do not rely on this
+        function to behave when passed arguments satisfying that
+        inequality condition.
 
         Examples
         --------
@@ -1549,20 +1277,20 @@ cdef class RandomState:
         cdef double flow, fhigh, fscale
         cdef object temp
 
-        flow = PyFloat_AsDouble(low)
-        fhigh = PyFloat_AsDouble(high)
+        olow = <ndarray>PyArray_FROM_OTF(low, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        ohigh = <ndarray>PyArray_FROM_OTF(high, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
 
-        fscale = fhigh - flow
-        if not npy_isfinite(fscale):
-            raise OverflowError('Range exceeds valid bounds')
+        if olow.shape == ohigh.shape == ():
+            flow = PyFloat_AsDouble(low)
+            fhigh = PyFloat_AsDouble(high)
+            fscale = fhigh - flow
 
-        if not PyErr_Occurred():
+            if not npy_isfinite(fscale):
+                raise OverflowError('Range exceeds valid bounds')
+
             return cont2_array_sc(self.internal_state, rk_uniform, size, flow,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-        olow = <ndarray>PyArray_FROM_OTF(low, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        ohigh = <ndarray>PyArray_FROM_OTF(high, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         temp = np.subtract(ohigh, olow)
         Py_INCREF(temp)  # needed to get around Pyrex's automatic reference-counting
                          # rules because EnsureArray steals a reference
@@ -1819,14 +1547,20 @@ cdef class RandomState:
 
         Parameters
         ----------
-        loc : float
+        loc : float or array_like of floats
             Mean ("centre") of the distribution.
-        scale : float
+        scale : float or array_like of floats
             Standard deviation (spread or "width") of the distribution.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``loc`` and ``scale`` are both scalars.
+            Otherwise, ``np.broadcast(loc, scale).size`` samples are drawn.
+
+        Returns
+        -------
+        out : ndarray or scalar
+            Drawn samples from the parameterized normal distribution.
 
         See Also
         --------
@@ -1887,20 +1621,19 @@ cdef class RandomState:
         cdef ndarray oloc, oscale
         cdef double floc, fscale
 
-        floc = PyFloat_AsDouble(loc)
-        fscale = PyFloat_AsDouble(scale)
-        if not PyErr_Occurred():
-            if fscale <= 0:
-                raise ValueError("scale <= 0")
+        oloc = <ndarray>PyArray_FROM_OTF(loc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        oscale = <ndarray>PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oloc.shape == oscale.shape == ():
+            floc = PyFloat_AsDouble(loc)
+            fscale = PyFloat_AsDouble(scale)
+            if np.signbit(fscale):
+                raise ValueError("scale < 0")
             return cont2_array_sc(self.internal_state, rk_normal, size, floc,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-
-        oloc = <ndarray>PyArray_FROM_OTF(loc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        oscale = <ndarray>PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oscale, 0)):
-            raise ValueError("scale <= 0")
+        if np.any(np.signbit(oscale)):
+            raise ValueError("scale < 0")
         return cont2_array(self.internal_state, rk_normal, size, oloc, oscale,
                            self.lock)
 
@@ -1926,28 +1659,32 @@ cdef class RandomState:
 
         Parameters
         ----------
-        a : float
+        a : float or array_like of floats
             Alpha, non-negative.
-        b : float
+        b : float or array_like of floats
             Beta, non-negative.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``a`` and ``b`` are both scalars.
+            Otherwise, ``np.broadcast(a, b).size`` samples are drawn.
 
         Returns
         -------
-        out : ndarray
-            Array of the given shape, containing values drawn from a
-            Beta distribution.
+        out : ndarray or scalar
+            Drawn samples from the parameterized beta distribution.
 
         """
         cdef ndarray oa, ob
         cdef double fa, fb
 
-        fa = PyFloat_AsDouble(a)
-        fb = PyFloat_AsDouble(b)
-        if not PyErr_Occurred():
+        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        ob = <ndarray>PyArray_FROM_OTF(b, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oa.shape == ob.shape == ():
+            fa = PyFloat_AsDouble(a)
+            fb = PyFloat_AsDouble(b)
+
             if fa <= 0:
                 raise ValueError("a <= 0")
             if fb <= 0:
@@ -1955,10 +1692,6 @@ cdef class RandomState:
             return cont2_array_sc(self.internal_state, rk_beta, size, fa, fb,
                                   self.lock)
 
-        PyErr_Clear()
-
-        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        ob = <ndarray>PyArray_FROM_OTF(b, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(oa, 0)):
             raise ValueError("a <= 0")
         if np.any(np.less_equal(ob, 0)):
@@ -1988,39 +1721,43 @@ cdef class RandomState:
 
         Parameters
         ----------
-        scale : float
+        scale : float or array_like of floats
             The scale parameter, :math:`\\beta = 1/\\lambda`.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``scale`` is a scalar.  Otherwise,
+            ``np.array(scale).size`` samples are drawn.
+
+        Returns
+        -------
+        out : ndarray or scalar
+            Drawn samples from the parameterized exponential distribution.
 
         References
         ----------
         .. [1] Peyton Z. Peebles Jr., "Probability, Random Variables and
                Random Signal Principles", 4th ed, 2001, p. 57.
-        .. [2] "Poisson Process", Wikipedia,
+        .. [2] Wikipedia, "Poisson process",
                http://en.wikipedia.org/wiki/Poisson_process
-        .. [3] "Exponential Distribution, Wikipedia,
+        .. [3] Wikipedia, "Exponential distribution",
                http://en.wikipedia.org/wiki/Exponential_distribution
 
         """
         cdef ndarray oscale
         cdef double fscale
 
-        fscale = PyFloat_AsDouble(scale)
-        if not PyErr_Occurred():
-            if fscale <= 0:
-                raise ValueError("scale <= 0")
+        oscale = <ndarray>PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oscale.shape == ():
+            fscale = PyFloat_AsDouble(scale)
+            if np.signbit(fscale):
+                raise ValueError("scale < 0")
             return cont1_array_sc(self.internal_state, rk_exponential, size,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-
-        oscale = <ndarray> PyArray_FROM_OTF(scale, NPY_DOUBLE,
-                                            NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oscale, 0.0)):
-            raise ValueError("scale <= 0")
+        if np.any(np.signbit(oscale)):
+            raise ValueError("scale < 0")
         return cont1_array(self.internal_state, rk_exponential, size, oscale,
                            self.lock)
 
@@ -2066,17 +1803,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        shape : float
+        shape : float or array_like of floats
             Parameter, should be > 0.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``shape`` is a scalar.  Otherwise,
+            ``np.array(shape).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-            The drawn samples.
+        out : ndarray or scalar
+            Drawn samples from the parameterized standard gamma distribution.
 
         See Also
         --------
@@ -2101,8 +1839,8 @@ cdef class RandomState:
         .. [1] Weisstein, Eric W. "Gamma Distribution." From MathWorld--A
                Wolfram Web Resource.
                http://mathworld.wolfram.com/GammaDistribution.html
-        .. [2] Wikipedia, "Gamma-distribution",
-               http://en.wikipedia.org/wiki/Gamma-distribution
+        .. [2] Wikipedia, "Gamma distribution",
+               http://en.wikipedia.org/wiki/Gamma_distribution
 
         Examples
         --------
@@ -2126,18 +1864,17 @@ cdef class RandomState:
         cdef ndarray oshape
         cdef double fshape
 
-        fshape = PyFloat_AsDouble(shape)
-        if not PyErr_Occurred():
-            if fshape <= 0:
-                raise ValueError("shape <= 0")
+        oshape = <ndarray>PyArray_FROM_OTF(shape, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oshape.shape == ():
+            fshape = PyFloat_AsDouble(shape)
+            if np.signbit(fshape):
+                raise ValueError("shape < 0")
             return cont1_array_sc(self.internal_state, rk_standard_gamma,
                                   size, fshape, self.lock)
 
-        PyErr_Clear()
-        oshape = <ndarray> PyArray_FROM_OTF(shape, NPY_DOUBLE,
-                                            NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oshape, 0.0)):
-            raise ValueError("shape <= 0")
+        if np.any(np.signbit(oshape)):
+            raise ValueError("shape < 0")
         return cont1_array(self.internal_state, rk_standard_gamma, size,
                            oshape, self.lock)
 
@@ -2153,19 +1890,21 @@ cdef class RandomState:
 
         Parameters
         ----------
-        shape : scalar > 0
-            The shape of the gamma distribution.
-        scale : scalar > 0, optional
-            The scale of the gamma distribution.  Default is equal to 1.
+        shape : float or array_like of floats
+            The shape of the gamma distribution. Should be greater than zero.
+        scale : float or array_like of floats, optional
+            The scale of the gamma distribution. Should be greater than zero.
+            Default is equal to 1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``shape`` and ``scale`` are both scalars.
+            Otherwise, ``np.broadcast(shape, scale).size`` samples are drawn.
 
         Returns
         -------
-        out : ndarray, float
-            Returns one sample unless `size` parameter is specified.
+        out : ndarray or scalar
+            Drawn samples from the parameterized gamma distribution.
 
         See Also
         --------
@@ -2190,14 +1929,14 @@ cdef class RandomState:
         .. [1] Weisstein, Eric W. "Gamma Distribution." From MathWorld--A
                Wolfram Web Resource.
                http://mathworld.wolfram.com/GammaDistribution.html
-        .. [2] Wikipedia, "Gamma-distribution",
-               http://en.wikipedia.org/wiki/Gamma-distribution
+        .. [2] Wikipedia, "Gamma distribution",
+               http://en.wikipedia.org/wiki/Gamma_distribution
 
         Examples
         --------
         Draw samples from the distribution:
 
-        >>> shape, scale = 2., 2. # mean and dispersion
+        >>> shape, scale = 2., 2. # mean=4, std=2*sqrt(2)
         >>> s = np.random.gamma(shape, scale, 1000)
 
         Display the histogram of the samples, along with
@@ -2215,23 +1954,23 @@ cdef class RandomState:
         cdef ndarray oshape, oscale
         cdef double fshape, fscale
 
-        fshape = PyFloat_AsDouble(shape)
-        fscale = PyFloat_AsDouble(scale)
-        if not PyErr_Occurred():
-            if fshape <= 0:
-                raise ValueError("shape <= 0")
-            if fscale <= 0:
-                raise ValueError("scale <= 0")
+        oshape = <ndarray>PyArray_FROM_OTF(shape, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        oscale = <ndarray>PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oshape.shape == oscale.shape == ():
+            fshape = PyFloat_AsDouble(shape)
+            fscale = PyFloat_AsDouble(scale)
+            if np.signbit(fshape):
+                raise ValueError("shape < 0")
+            if np.signbit(fscale):
+                raise ValueError("scale < 0")
             return cont2_array_sc(self.internal_state, rk_gamma, size, fshape,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-        oshape = <ndarray>PyArray_FROM_OTF(shape, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        oscale = <ndarray>PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oshape, 0.0)):
-            raise ValueError("shape <= 0")
-        if np.any(np.less_equal(oscale, 0.0)):
-            raise ValueError("scale <= 0")
+        if np.any(np.signbit(oshape)):
+            raise ValueError("shape < 0")
+        if np.any(np.signbit(oscale)):
+            raise ValueError("scale < 0")
         return cont2_array(self.internal_state, rk_gamma, size, oshape, oscale,
                            self.lock)
 
@@ -2253,19 +1992,20 @@ cdef class RandomState:
 
         Parameters
         ----------
-        dfnum : float
+        dfnum : int or array_like of ints
             Degrees of freedom in numerator. Should be greater than zero.
-        dfden : float
+        dfden : int or array_like of ints
             Degrees of freedom in denominator. Should be greater than zero.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``dfnum`` and ``dfden`` are both scalars.
+            Otherwise, ``np.broadcast(dfnum, dfden).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-            Samples from the Fisher distribution.
+        out : ndarray or scalar
+            Drawn samples from the parameterized Fisher distribution.
 
         See Also
         --------
@@ -2320,20 +2060,20 @@ cdef class RandomState:
         cdef ndarray odfnum, odfden
         cdef double fdfnum, fdfden
 
-        fdfnum = PyFloat_AsDouble(dfnum)
-        fdfden = PyFloat_AsDouble(dfden)
-        if not PyErr_Occurred():
+        odfnum = <ndarray>PyArray_FROM_OTF(dfnum, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        odfden = <ndarray>PyArray_FROM_OTF(dfden, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if odfnum.shape == odfden.shape == ():
+            fdfnum = PyFloat_AsDouble(dfnum)
+            fdfden = PyFloat_AsDouble(dfden)
+
             if fdfnum <= 0:
-                raise ValueError("shape <= 0")
+                raise ValueError("dfnum <= 0")
             if fdfden <= 0:
-                raise ValueError("scale <= 0")
+                raise ValueError("dfden <= 0")
             return cont2_array_sc(self.internal_state, rk_f, size, fdfnum,
                                   fdfden, self.lock)
 
-        PyErr_Clear()
-
-        odfnum = <ndarray>PyArray_FROM_OTF(dfnum, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        odfden = <ndarray>PyArray_FROM_OTF(dfden, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(odfnum, 0.0)):
             raise ValueError("dfnum <= 0")
         if np.any(np.less_equal(odfden, 0.0)):
@@ -2354,21 +2094,23 @@ cdef class RandomState:
 
         Parameters
         ----------
-        dfnum : int
+        dfnum : int or array_like of ints
             Parameter, should be > 1.
-        dfden : int
+        dfden : int or array_like of ints
             Parameter, should be > 1.
-        nonc : float
+        nonc : float or array_like of floats
             Parameter, should be >= 0.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``dfnum``, ``dfden``, and ``nonc``
+            are all scalars.  Otherwise, ``np.broadcast(dfnum, dfden, nonc).size``
+            samples are drawn.
 
         Returns
         -------
-        samples : scalar or ndarray
-            Drawn samples.
+        out : ndarray or scalar
+            Drawn samples from the parameterized noncentral Fisher distribution.
 
         Notes
         -----
@@ -2383,7 +2125,7 @@ cdef class RandomState:
         .. [1] Weisstein, Eric W. "Noncentral F-Distribution."
                From MathWorld--A Wolfram Web Resource.
                http://mathworld.wolfram.com/NoncentralF-Distribution.html
-        .. [2] Wikipedia, "Noncentral F distribution",
+        .. [2] Wikipedia, "Noncentral F-distribution",
                http://en.wikipedia.org/wiki/Noncentral_F-distribution
 
         Examples
@@ -2409,10 +2151,15 @@ cdef class RandomState:
         cdef ndarray odfnum, odfden, ononc
         cdef double fdfnum, fdfden, fnonc
 
-        fdfnum = PyFloat_AsDouble(dfnum)
-        fdfden = PyFloat_AsDouble(dfden)
-        fnonc = PyFloat_AsDouble(nonc)
-        if not PyErr_Occurred():
+        odfnum = <ndarray>PyArray_FROM_OTF(dfnum, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        odfden = <ndarray>PyArray_FROM_OTF(dfden, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        ononc = <ndarray>PyArray_FROM_OTF(nonc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if odfnum.shape == odfden.shape == ononc.shape == ():
+            fdfnum = PyFloat_AsDouble(dfnum)
+            fdfden = PyFloat_AsDouble(dfden)
+            fnonc = PyFloat_AsDouble(nonc)
+
             if fdfnum <= 1:
                 raise ValueError("dfnum <= 1")
             if fdfden <= 0:
@@ -2421,12 +2168,6 @@ cdef class RandomState:
                 raise ValueError("nonc < 0")
             return cont3_array_sc(self.internal_state, rk_noncentral_f, size,
                                   fdfnum, fdfden, fnonc, self.lock)
-
-        PyErr_Clear()
-
-        odfnum = <ndarray>PyArray_FROM_OTF(dfnum, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        odfden = <ndarray>PyArray_FROM_OTF(dfden, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        ononc = <ndarray>PyArray_FROM_OTF(nonc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
 
         if np.any(np.less_equal(odfnum, 1.0)):
             raise ValueError("dfnum <= 1")
@@ -2450,18 +2191,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        df : int
+        df : int or array_like of ints
              Number of degrees of freedom.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``df`` is a scalar.  Otherwise,
+            ``np.array(df).size`` samples are drawn.
 
         Returns
         -------
-        output : ndarray
-            Samples drawn from the distribution, packed in a `size`-shaped
-            array.
+        out : ndarray or scalar
+            Drawn samples from the parameterized chi-square distribution.
 
         Raises
         ------
@@ -2503,16 +2244,16 @@ cdef class RandomState:
         cdef ndarray odf
         cdef double fdf
 
-        fdf = PyFloat_AsDouble(df)
-        if not PyErr_Occurred():
+        odf = <ndarray>PyArray_FROM_OTF(df, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if odf.shape == ():
+            fdf = PyFloat_AsDouble(df)
+
             if fdf <= 0:
                 raise ValueError("df <= 0")
             return cont1_array_sc(self.internal_state, rk_chisquare, size, fdf,
                                   self.lock)
 
-        PyErr_Clear()
-
-        odf = <ndarray>PyArray_FROM_OTF(df, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(odf, 0.0)):
             raise ValueError("df <= 0")
         return cont1_array(self.internal_state, rk_chisquare, size, odf,
@@ -2529,15 +2270,21 @@ cdef class RandomState:
 
         Parameters
         ----------
-        df : int
-            Degrees of freedom, should be > 0 as of Numpy 1.10,
+        df : int or array_like of ints
+            Degrees of freedom, should be > 0 as of NumPy 1.10.0,
             should be > 1 for earlier versions.
-        nonc : float
+        nonc : float or array_like of floats
             Non-centrality, should be non-negative.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``df`` and ``nonc`` are both scalars.
+            Otherwise, ``np.broadcast(df, nonc).size`` samples are drawn.
+
+        Returns
+        -------
+        out : ndarray or scalar
+            Drawn samples from the parameterized noncentral chi-square distribution.
 
         Notes
         -----
@@ -2594,9 +2341,14 @@ cdef class RandomState:
         """
         cdef ndarray odf, ononc
         cdef double fdf, fnonc
-        fdf = PyFloat_AsDouble(df)
-        fnonc = PyFloat_AsDouble(nonc)
-        if not PyErr_Occurred():
+
+        odf = <ndarray>PyArray_FROM_OTF(df, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        ononc = <ndarray>PyArray_FROM_OTF(nonc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if odf.shape == ononc.shape == ():
+            fdf = PyFloat_AsDouble(df)
+            fnonc = PyFloat_AsDouble(nonc)
+
             if fdf <= 0:
                 raise ValueError("df <= 0")
             if fnonc < 0:
@@ -2604,10 +2356,6 @@ cdef class RandomState:
             return cont2_array_sc(self.internal_state, rk_noncentral_chisquare,
                                   size, fdf, fnonc, self.lock)
 
-        PyErr_Clear()
-
-        odf = <ndarray>PyArray_FROM_OTF(df, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        ononc = <ndarray>PyArray_FROM_OTF(nonc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(odf, 0.0)):
             raise ValueError("df <= 0")
         if np.any(np.less(ononc, 0.0)):
@@ -2692,17 +2440,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        df : int
+        df : int or array_like of ints
             Degrees of freedom, should be > 0.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``df`` is a scalar.  Otherwise,
+            ``np.array(df).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-            Drawn samples.
+        out : ndarray or scalar
+            Drawn samples from the parameterized standard Student's t distribution.
 
         Notes
         -----
@@ -2769,16 +2518,16 @@ cdef class RandomState:
         cdef ndarray odf
         cdef double fdf
 
-        fdf = PyFloat_AsDouble(df)
-        if not PyErr_Occurred():
+        odf = <ndarray> PyArray_FROM_OTF(df, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if odf.shape == ():
+            fdf = PyFloat_AsDouble(df)
+
             if fdf <= 0:
                 raise ValueError("df <= 0")
             return cont1_array_sc(self.internal_state, rk_standard_t, size,
                                   fdf, self.lock)
 
-        PyErr_Clear()
-
-        odf = <ndarray> PyArray_FROM_OTF(df, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(odf, 0.0)):
             raise ValueError("df <= 0")
         return cont1_array(self.internal_state, rk_standard_t, size, odf,
@@ -2800,19 +2549,20 @@ cdef class RandomState:
 
         Parameters
         ----------
-        mu : float
+        mu : float or array_like of floats
             Mode ("center") of the distribution.
-        kappa : float
+        kappa : float or array_like of floats
             Dispersion of the distribution, has to be >=0.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``mu`` and ``kappa`` are both scalars.
+            Otherwise, ``np.broadcast(mu, kappa).size`` samples are drawn.
 
         Returns
         -------
-        samples : scalar or ndarray
-            The returned samples, which are in the interval [-pi, pi].
+        out : ndarray or scalar
+            Drawn samples from the parameterized von Mises distribution.
 
         See Also
         --------
@@ -2864,19 +2614,18 @@ cdef class RandomState:
         cdef ndarray omu, okappa
         cdef double fmu, fkappa
 
-        fmu = PyFloat_AsDouble(mu)
-        fkappa = PyFloat_AsDouble(kappa)
-        if not PyErr_Occurred():
+        omu = <ndarray> PyArray_FROM_OTF(mu, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        okappa = <ndarray> PyArray_FROM_OTF(kappa, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if omu.shape == okappa.shape == ():
+            fmu = PyFloat_AsDouble(mu)
+            fkappa = PyFloat_AsDouble(kappa)
+
             if fkappa < 0:
                 raise ValueError("kappa < 0")
             return cont2_array_sc(self.internal_state, rk_vonmises, size, fmu,
                                   fkappa, self.lock)
 
-        PyErr_Clear()
-
-        omu = <ndarray> PyArray_FROM_OTF(mu, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        okappa = <ndarray> PyArray_FROM_OTF(kappa, NPY_DOUBLE,
-                                            NPY_ARRAY_ALIGNED)
         if np.any(np.less(okappa, 0.0)):
             raise ValueError("kappa < 0")
         return cont2_array(self.internal_state, rk_vonmises, size, omu, okappa,
@@ -2908,12 +2657,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        shape : float, > 0.
-            Shape of the distribution.
+        a : float or array_like of floats
+            Shape of the distribution. Should be greater than zero.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``a`` is a scalar.  Otherwise,
+            ``np.array(a).size`` samples are drawn.
+
+        Returns
+        -------
+        out : ndarray or scalar
+            Drawn samples from the parameterized Pareto distribution.
 
         See Also
         --------
@@ -2972,16 +2727,16 @@ cdef class RandomState:
         cdef ndarray oa
         cdef double fa
 
-        fa = PyFloat_AsDouble(a)
-        if not PyErr_Occurred():
+        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oa.shape == ():
+            fa = PyFloat_AsDouble(a)
+
             if fa <= 0:
                 raise ValueError("a <= 0")
             return cont1_array_sc(self.internal_state, rk_pareto, size, fa,
                                   self.lock)
 
-        PyErr_Clear()
-
-        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(oa, 0.0)):
             raise ValueError("a <= 0")
         return cont1_array(self.internal_state, rk_pareto, size, oa, self.lock)
@@ -3004,16 +2759,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        a : float
-            Shape of the distribution.
+        a : float or array_like of floats
+            Shape of the distribution. Should be greater than zero.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``a`` is a scalar.  Otherwise,
+            ``np.array(a).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray
+        out : ndarray or scalar
+            Drawn samples from the parameterized Weibull distribution.
 
         See Also
         --------
@@ -3080,18 +2837,17 @@ cdef class RandomState:
         cdef ndarray oa
         cdef double fa
 
-        fa = PyFloat_AsDouble(a)
-        if not PyErr_Occurred():
-            if fa <= 0:
-                raise ValueError("a <= 0")
+        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oa.shape == ():
+            fa = PyFloat_AsDouble(a)
+            if np.signbit(fa):
+                raise ValueError("a < 0")
             return cont1_array_sc(self.internal_state, rk_weibull, size, fa,
                                   self.lock)
 
-        PyErr_Clear()
-
-        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oa, 0.0)):
-            raise ValueError("a <= 0")
+        if np.any(np.signbit(oa)):
+            raise ValueError("a < 0")
         return cont1_array(self.internal_state, rk_weibull, size, oa,
                            self.lock)
 
@@ -3106,17 +2862,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        a : float
-            parameter, > 0
+        a : float or array_like of floats
+            Parameter of the distribution. Should be greater than zero.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``a`` is a scalar.  Otherwise,
+            ``np.array(a).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-            The returned samples lie in [0, 1].
+        out : ndarray or scalar
+            Drawn samples from the parameterized power distribution.
 
         Raises
         ------
@@ -3192,18 +2949,17 @@ cdef class RandomState:
         cdef ndarray oa
         cdef double fa
 
-        fa = PyFloat_AsDouble(a)
-        if not PyErr_Occurred():
-            if fa <= 0:
-                raise ValueError("a <= 0")
+        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oa.shape == ():
+            fa = PyFloat_AsDouble(a)
+            if np.signbit(fa):
+                raise ValueError("a < 0")
             return cont1_array_sc(self.internal_state, rk_power, size, fa,
                                   self.lock)
 
-        PyErr_Clear()
-
-        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oa, 0.0)):
-            raise ValueError("a <= 0")
+        if np.any(np.signbit(oa)):
+            raise ValueError("a < 0")
         return cont1_array(self.internal_state, rk_power, size, oa, self.lock)
 
     def laplace(self, loc=0.0, scale=1.0, size=None):
@@ -3220,18 +2976,20 @@ cdef class RandomState:
 
         Parameters
         ----------
-        loc : float, optional
-            The position, :math:`\\mu`, of the distribution peak.
-        scale : float, optional
-            :math:`\\lambda`, the exponential decay.
+        loc : float or array_like of floats, optional
+            The position, :math:`\\mu`, of the distribution peak. Default is 0.
+        scale : float or array_like of floats, optional
+            :math:`\\lambda`, the exponential decay. Default is 1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``loc`` and ``scale`` are both scalars.
+            Otherwise, ``np.broadcast(loc, scale).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or float
+        out : ndarray or scalar
+            Drawn samples from the parameterized Laplace distribution.
 
         Notes
         -----
@@ -3257,7 +3015,7 @@ cdef class RandomState:
         .. [3] Weisstein, Eric W. "Laplace Distribution."
                From MathWorld--A Wolfram Web Resource.
                http://mathworld.wolfram.com/LaplaceDistribution.html
-        .. [4] Wikipedia, "Laplace Distribution",
+        .. [4] Wikipedia, "Laplace distribution",
                http://en.wikipedia.org/wiki/Laplace_distribution
 
         Examples
@@ -3286,19 +3044,19 @@ cdef class RandomState:
         cdef ndarray oloc, oscale
         cdef double floc, fscale
 
-        floc = PyFloat_AsDouble(loc)
-        fscale = PyFloat_AsDouble(scale)
-        if not PyErr_Occurred():
-            if fscale <= 0:
-                raise ValueError("scale <= 0")
+        oloc = PyArray_FROM_OTF(loc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        oscale = PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oloc.shape == oscale.shape == ():
+            floc = PyFloat_AsDouble(loc)
+            fscale = PyFloat_AsDouble(scale)
+            if np.signbit(fscale):
+                raise ValueError("scale < 0")
             return cont2_array_sc(self.internal_state, rk_laplace, size, floc,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-        oloc = PyArray_FROM_OTF(loc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        oscale = PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oscale, 0.0)):
-            raise ValueError("scale <= 0")
+        if np.any(np.signbit(oscale)):
+            raise ValueError("scale < 0")
         return cont2_array(self.internal_state, rk_laplace, size, oloc, oscale,
                            self.lock)
 
@@ -3314,18 +3072,20 @@ cdef class RandomState:
 
         Parameters
         ----------
-        loc : float
-            The location of the mode of the distribution.
-        scale : float
-            The scale parameter of the distribution.
+        loc : float or array_like of floats, optional
+            The location of the mode of the distribution. Default is 0.
+        scale : float or array_like of floats, optional
+            The scale parameter of the distribution. Default is 1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``loc`` and ``scale`` are both scalars.
+            Otherwise, ``np.broadcast(loc, scale).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
+        out : ndarray or scalar
+            Drawn samples from the parameterized Gumbel distribution.
 
         See Also
         --------
@@ -3415,19 +3175,19 @@ cdef class RandomState:
         cdef ndarray oloc, oscale
         cdef double floc, fscale
 
-        floc = PyFloat_AsDouble(loc)
-        fscale = PyFloat_AsDouble(scale)
-        if not PyErr_Occurred():
-            if fscale <= 0:
-                raise ValueError("scale <= 0")
+        oloc = PyArray_FROM_OTF(loc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        oscale = PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oloc.shape == oscale.shape == ():
+            floc = PyFloat_AsDouble(loc)
+            fscale = PyFloat_AsDouble(scale)
+            if np.signbit(fscale):
+                raise ValueError("scale < 0")
             return cont2_array_sc(self.internal_state, rk_gumbel, size, floc,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-        oloc = PyArray_FROM_OTF(loc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        oscale = PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oscale, 0.0)):
-            raise ValueError("scale <= 0")
+        if np.any(np.signbit(oscale)):
+            raise ValueError("scale < 0")
         return cont2_array(self.internal_state, rk_gumbel, size, oloc, oscale,
                            self.lock)
 
@@ -3442,19 +3202,21 @@ cdef class RandomState:
 
         Parameters
         ----------
-        loc : float
-
-        scale : float > 0.
-
+        loc : float or array_like of floats, optional
+            Parameter of the distribution. Default is 0.
+        scale : float or array_like of floats, optional
+            Parameter of the distribution. Should be greater than zero.
+            Default is 1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``loc`` and ``scale`` are both scalars.
+            Otherwise, ``np.broadcast(loc, scale).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-                  where the values are all integers in  [0, n].
+        out : ndarray or scalar
+            Drawn samples from the parameterized logistic distribution.
 
         See Also
         --------
@@ -3506,19 +3268,19 @@ cdef class RandomState:
         cdef ndarray oloc, oscale
         cdef double floc, fscale
 
-        floc = PyFloat_AsDouble(loc)
-        fscale = PyFloat_AsDouble(scale)
-        if not PyErr_Occurred():
-            if fscale <= 0:
-                raise ValueError("scale <= 0")
+        oloc = PyArray_FROM_OTF(loc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        oscale = PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oloc.shape == oscale.shape == ():
+            floc = PyFloat_AsDouble(loc)
+            fscale = PyFloat_AsDouble(scale)
+            if np.signbit(fscale):
+                raise ValueError("scale < 0")
             return cont2_array_sc(self.internal_state, rk_logistic, size, floc,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-        oloc = PyArray_FROM_OTF(loc, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        oscale = PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oscale, 0.0)):
-            raise ValueError("scale <= 0")
+        if np.any(np.signbit(oscale)):
+            raise ValueError("scale < 0")
         return cont2_array(self.internal_state, rk_logistic, size, oloc,
                            oscale, self.lock)
 
@@ -3535,20 +3297,21 @@ cdef class RandomState:
 
         Parameters
         ----------
-        mean : float
-            Mean value of the underlying normal distribution
-        sigma : float, > 0.
-            Standard deviation of the underlying normal distribution
+        mean : float or array_like of floats, optional
+            Mean value of the underlying normal distribution. Default is 0.
+        sigma : float or array_like of floats, optional
+            Standard deviation of the underlying normal distribution. Should
+            be greater than zero. Default is 1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``mean`` and ``sigma`` are both scalars.
+            Otherwise, ``np.broadcast(mean, sigma).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or float
-            The desired samples. An array of the same shape as `size` if given,
-            if `size` is None a float is returned.
+        out : ndarray or scalar
+            Drawn samples from the parameterized log-normal distribution.
 
         See Also
         --------
@@ -3629,21 +3392,19 @@ cdef class RandomState:
         cdef ndarray omean, osigma
         cdef double fmean, fsigma
 
-        fmean = PyFloat_AsDouble(mean)
-        fsigma = PyFloat_AsDouble(sigma)
+        omean = PyArray_FROM_OTF(mean, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        osigma = PyArray_FROM_OTF(sigma, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
 
-        if not PyErr_Occurred():
-            if fsigma <= 0:
-                raise ValueError("sigma <= 0")
+        if omean.shape == osigma.shape == ():
+            fmean = PyFloat_AsDouble(mean)
+            fsigma = PyFloat_AsDouble(sigma)
+            if np.signbit(fsigma):
+                raise ValueError("sigma < 0")
             return cont2_array_sc(self.internal_state, rk_lognormal, size,
                                   fmean, fsigma, self.lock)
 
-        PyErr_Clear()
-
-        omean = PyArray_FROM_OTF(mean, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        osigma = PyArray_FROM_OTF(sigma, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(osigma, 0.0)):
-            raise ValueError("sigma <= 0.0")
+        if np.any(np.signbit(osigma)):
+            raise ValueError("sigma < 0.0")
         return cont2_array(self.internal_state, rk_lognormal, size, omean,
                            osigma, self.lock)
 
@@ -3658,12 +3419,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        scale : scalar
-            Scale, also equals the mode. Should be >= 0.
+        scale : float or array_like of floats, optional
+            Scale, also equals the mode. Should be >= 0. Default is 1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``scale`` is a scalar.  Otherwise,
+            ``np.array(scale).size`` samples are drawn.
+
+        Returns
+        -------
+        out : ndarray or scalar
+            Drawn samples from the parameterized Rayleigh distribution.
 
         Notes
         -----
@@ -3706,19 +3473,17 @@ cdef class RandomState:
         cdef ndarray oscale
         cdef double fscale
 
-        fscale = PyFloat_AsDouble(scale)
+        oscale = <ndarray>PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
 
-        if not PyErr_Occurred():
-            if fscale <= 0:
-                raise ValueError("scale <= 0")
+        if oscale.shape == ():
+            fscale = PyFloat_AsDouble(scale)
+            if np.signbit(fscale):
+                raise ValueError("scale < 0")
             return cont1_array_sc(self.internal_state, rk_rayleigh, size,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-
-        oscale = <ndarray>PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        if np.any(np.less_equal(oscale, 0.0)):
-            raise ValueError("scale <= 0.0")
+        if np.any(np.signbit(oscale)):
+            raise ValueError("scale < 0.0")
         return cont1_array(self.internal_state, rk_rayleigh, size, oscale,
                            self.lock)
 
@@ -3739,19 +3504,20 @@ cdef class RandomState:
 
         Parameters
         ----------
-        mean : scalar
+        mean : float or array_like of floats
             Distribution mean, should be > 0.
-        scale : scalar
+        scale : float or array_like of floats
             Scale parameter, should be >= 0.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``mean`` and ``scale`` are both scalars.
+            Otherwise, ``np.broadcast(mean, scale).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-            Drawn sample, all greater than zero.
+        out : ndarray or scalar
+            Drawn samples from the parameterized Wald distribution.
 
         Notes
         -----
@@ -3787,9 +3553,13 @@ cdef class RandomState:
         cdef ndarray omean, oscale
         cdef double fmean, fscale
 
-        fmean = PyFloat_AsDouble(mean)
-        fscale = PyFloat_AsDouble(scale)
-        if not PyErr_Occurred():
+        omean = PyArray_FROM_OTF(mean, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        oscale = PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if omean.shape == oscale.shape == ():
+            fmean = PyFloat_AsDouble(mean)
+            fscale = PyFloat_AsDouble(scale)
+
             if fmean <= 0:
                 raise ValueError("mean <= 0")
             if fscale <= 0:
@@ -3797,9 +3567,6 @@ cdef class RandomState:
             return cont2_array_sc(self.internal_state, rk_wald, size, fmean,
                                   fscale, self.lock)
 
-        PyErr_Clear()
-        omean = PyArray_FROM_OTF(mean, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        oscale = PyArray_FROM_OTF(scale, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(omean,0.0)):
             raise ValueError("mean <= 0.0")
         elif np.any(np.less_equal(oscale,0.0)):
@@ -3811,7 +3578,8 @@ cdef class RandomState:
         """
         triangular(left, mode, right, size=None)
 
-        Draw samples from the triangular distribution.
+        Draw samples from the triangular distribution over the
+        interval ``[left, right]``.
 
         The triangular distribution is a continuous probability
         distribution with lower limit left, peak at mode, and upper
@@ -3820,22 +3588,24 @@ cdef class RandomState:
 
         Parameters
         ----------
-        left : scalar
+        left : float or array_like of floats
             Lower limit.
-        mode : scalar
+        mode : float or array_like of floats
             The value where the peak of the distribution occurs.
             The value should fulfill the condition ``left <= mode <= right``.
-        right : scalar
+        right : float or array_like of floats
             Upper limit, should be larger than `left`.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``left``, ``mode``, and ``right``
+            are all scalars.  Otherwise, ``np.broadcast(left, mode, right).size``
+            samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-            The returned samples all lie in the interval [left, right].
+        out : ndarray or scalar
+            Drawn samples from the parameterized triangular distribution.
 
         Notes
         -----
@@ -3870,10 +3640,15 @@ cdef class RandomState:
         cdef ndarray oleft, omode, oright
         cdef double fleft, fmode, fright
 
-        fleft = PyFloat_AsDouble(left)
-        fright = PyFloat_AsDouble(right)
-        fmode = PyFloat_AsDouble(mode)
-        if not PyErr_Occurred():
+        oleft = <ndarray>PyArray_FROM_OTF(left, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        omode = <ndarray>PyArray_FROM_OTF(mode, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        oright = <ndarray>PyArray_FROM_OTF(right, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oleft.shape == omode.shape == oright.shape == ():
+            fleft = PyFloat_AsDouble(left)
+            fright = PyFloat_AsDouble(right)
+            fmode = PyFloat_AsDouble(mode)
+
             if fleft > fmode:
                 raise ValueError("left > mode")
             if fmode > fright:
@@ -3882,11 +3657,6 @@ cdef class RandomState:
                 raise ValueError("left == right")
             return cont3_array_sc(self.internal_state, rk_triangular, size,
                                   fleft, fmode, fright, self.lock)
-
-        PyErr_Clear()
-        oleft = <ndarray>PyArray_FROM_OTF(left, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        omode = <ndarray>PyArray_FROM_OTF(mode, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        oright = <ndarray>PyArray_FROM_OTF(right, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
 
         if np.any(np.greater(oleft, omode)):
             raise ValueError("left > mode")
@@ -3911,19 +3681,22 @@ cdef class RandomState:
 
         Parameters
         ----------
-        n : float (but truncated to an integer)
-                parameter, >= 0.
-        p : float
-                parameter, >= 0 and <=1.
+        n : int or array_like of ints
+            Parameter of the distribution, >= 0. Floats are also accepted,
+            but they will be truncated to integers.
+        p : float or array_like of floats
+            Parameter of the distribution, >= 0 and <=1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``n`` and ``p`` are both scalars.
+            Otherwise, ``np.broadcast(n, p).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-                  where the values are all integers in  [0, n].
+        out : ndarray or scalar
+            Drawn samples from the parameterized binomial distribution, where
+            each sample is equal to the number of successes over the n trials.
 
         See Also
         --------
@@ -3958,7 +3731,7 @@ cdef class RandomState:
         .. [4] Weisstein, Eric W. "Binomial Distribution." From MathWorld--A
                Wolfram Web Resource.
                http://mathworld.wolfram.com/BinomialDistribution.html
-        .. [5] Wikipedia, "Binomial-distribution",
+        .. [5] Wikipedia, "Binomial distribution",
                http://en.wikipedia.org/wiki/Binomial_distribution
 
         Examples
@@ -3984,9 +3757,13 @@ cdef class RandomState:
         cdef long ln
         cdef double fp
 
-        fp = PyFloat_AsDouble(p)
-        ln = PyInt_AsLong(n)
-        if not PyErr_Occurred():
+        on = <ndarray>PyArray_FROM_OTF(n, NPY_LONG, NPY_ARRAY_ALIGNED)
+        op = <ndarray>PyArray_FROM_OTF(p, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if on.shape == op.shape == ():
+            fp = PyFloat_AsDouble(p)
+            ln = PyInt_AsLong(n)
+
             if ln < 0:
                 raise ValueError("n < 0")
             if fp < 0:
@@ -3998,10 +3775,6 @@ cdef class RandomState:
             return discnp_array_sc(self.internal_state, rk_binomial, size, ln,
                                    fp, self.lock)
 
-        PyErr_Clear()
-
-        on = <ndarray>PyArray_FROM_OTF(n, NPY_LONG, NPY_ARRAY_ALIGNED)
-        op = <ndarray>PyArray_FROM_OTF(p, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less(n, 0)):
             raise ValueError("n < 0")
         if np.any(np.less(p, 0)):
@@ -4023,19 +3796,24 @@ cdef class RandomState:
 
         Parameters
         ----------
-        n : int
-            Parameter, > 0.
-        p : float
-            Parameter, >= 0 and <=1.
+        n : int or array_like of ints
+            Parameter of the distribution, > 0. Floats are also accepted,
+            but they will be truncated to integers.
+        p : float or array_like of floats
+            Parameter of the distribution, >= 0 and <=1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``n`` and ``p`` are both scalars.
+            Otherwise, ``np.broadcast(n, p).size`` samples are drawn.
 
         Returns
         -------
-        samples : int or ndarray of ints
-            Drawn samples.
+        out : ndarray or scalar
+            Drawn samples from the parameterized negative binomial distribution,
+            where each sample is equal to N, the number of trials it took to
+            achieve n - 1 successes, N - (n - 1) failures, and a success on the,
+            (N + n)th trial.
 
         Notes
         -----
@@ -4082,9 +3860,13 @@ cdef class RandomState:
         cdef double fn
         cdef double fp
 
-        fp = PyFloat_AsDouble(p)
-        fn = PyFloat_AsDouble(n)
-        if not PyErr_Occurred():
+        on = <ndarray>PyArray_FROM_OTF(n, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+        op = <ndarray>PyArray_FROM_OTF(p, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if on.shape == op.shape == ():
+            fp = PyFloat_AsDouble(p)
+            fn = PyFloat_AsDouble(n)
+
             if fn <= 0:
                 raise ValueError("n <= 0")
             if fp < 0:
@@ -4094,10 +3876,6 @@ cdef class RandomState:
             return discdd_array_sc(self.internal_state, rk_negative_binomial,
                                    size, fn, fp, self.lock)
 
-        PyErr_Clear()
-
-        on = <ndarray>PyArray_FROM_OTF(n, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
-        op = <ndarray>PyArray_FROM_OTF(p, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(n, 0)):
             raise ValueError("n <= 0")
         if np.any(np.less(p, 0)):
@@ -4118,18 +3896,19 @@ cdef class RandomState:
 
         Parameters
         ----------
-        lam : float or sequence of float
+        lam : float or array_like of floats
             Expectation of interval, should be >= 0. A sequence of expectation
             intervals must be broadcastable over the requested size.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``lam`` is a scalar. Otherwise,
+            ``np.array(lam).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-            The drawn samples, of shape *size*, if it was provided.
+        out : ndarray or scalar
+            Drawn samples from the parameterized Poisson distribution.
 
         Notes
         -----
@@ -4174,8 +3953,12 @@ cdef class RandomState:
         """
         cdef ndarray olam
         cdef double flam
-        flam = PyFloat_AsDouble(lam)
-        if not PyErr_Occurred():
+
+        olam = <ndarray>PyArray_FROM_OTF(lam, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if olam.shape == ():
+            flam = PyFloat_AsDouble(lam)
+
             if lam < 0:
                 raise ValueError("lam < 0")
             if lam > self.poisson_lam_max:
@@ -4183,9 +3966,6 @@ cdef class RandomState:
             return discd_array_sc(self.internal_state, rk_poisson, size, flam,
                                   self.lock)
 
-        PyErr_Clear()
-
-        olam = <ndarray>PyArray_FROM_OTF(lam, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less(olam, 0)):
             raise ValueError("lam < 0")
         if np.any(np.greater(olam, self.poisson_lam_max)):
@@ -4209,17 +3989,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        a : float > 1
-            Distribution parameter.
+        a : float or array_like of floats
+            Distribution parameter. Should be greater than 1.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``a`` is a scalar. Otherwise,
+            ``np.array(a).size`` samples are drawn.
 
         Returns
         -------
-        samples : scalar or ndarray
-            The returned samples are greater than or equal to one.
+        out : ndarray or scalar
+            Drawn samples from the parameterized Zipf distribution.
 
         See Also
         --------
@@ -4255,11 +4036,13 @@ cdef class RandomState:
         the probability density function:
 
         >>> import matplotlib.pyplot as plt
-        >>> import scipy.special as sps
-        Truncate s values at 50 so plot is interesting
+        >>> from scipy import special
+
+        Truncate s values at 50 so plot is interesting:
+
         >>> count, bins, ignored = plt.hist(s[s<50], 50, normed=True)
         >>> x = np.arange(1., 50.)
-        >>> y = x**(-a)/sps.zetac(a)
+        >>> y = x**(-a) / special.zetac(a)
         >>> plt.plot(x, y/max(y), linewidth=2, color='r')
         >>> plt.show()
 
@@ -4267,16 +4050,16 @@ cdef class RandomState:
         cdef ndarray oa
         cdef double fa
 
-        fa = PyFloat_AsDouble(a)
-        if not PyErr_Occurred():
+        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if oa.shape == ():
+            fa = PyFloat_AsDouble(a)
+
             if fa <= 1.0:
                 raise ValueError("a <= 1.0")
             return discd_array_sc(self.internal_state, rk_zipf, size, fa,
                                   self.lock)
 
-        PyErr_Clear()
-
-        oa = <ndarray>PyArray_FROM_OTF(a, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(oa, 1.0)):
             raise ValueError("a <= 1.0")
         return discd_array(self.internal_state, rk_zipf, size, oa, self.lock)
@@ -4301,18 +4084,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        p : float
+        p : float or array_like of floats
             The probability of success of an individual trial.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``p`` is a scalar.  Otherwise,
+            ``np.array(p).size`` samples are drawn.
 
         Returns
         -------
-        out : ndarray
-            Samples from the geometric distribution, shaped according to
-            `size`.
+        out : ndarray or scalar
+            Drawn samples from the parameterized geometric distribution.
 
         Examples
         --------
@@ -4330,8 +4113,11 @@ cdef class RandomState:
         cdef ndarray op
         cdef double fp
 
-        fp = PyFloat_AsDouble(p)
-        if not PyErr_Occurred():
+        op = <ndarray>PyArray_FROM_OTF(p, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if op.shape == ():
+            fp = PyFloat_AsDouble(p)
+
             if fp < 0.0:
                 raise ValueError("p < 0.0")
             if fp > 1.0:
@@ -4339,10 +4125,6 @@ cdef class RandomState:
             return discd_array_sc(self.internal_state, rk_geometric, size, fp,
                                   self.lock)
 
-        PyErr_Clear()
-
-
-        op = <ndarray>PyArray_FROM_OTF(p, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less(op, 0.0)):
             raise ValueError("p < 0.0")
         if np.any(np.greater(op, 1.0)):
@@ -4363,22 +4145,24 @@ cdef class RandomState:
 
         Parameters
         ----------
-        ngood : int or array_like
+        ngood : int or array_like of ints
             Number of ways to make a good selection.  Must be nonnegative.
-        nbad : int or array_like
+        nbad : int or array_like of ints
             Number of ways to make a bad selection.  Must be nonnegative.
-        nsample : int or array_like
+        nsample : int or array_like of ints
             Number of items sampled.  Must be at least 1 and at most
             ``ngood + nbad``.
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``ngood``, ``nbad``, and ``nsample``
+            are all scalars.  Otherwise, ``np.broadcast(ngood, nbad, nsample).size``
+            samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-            The values are all integers in  [0, n].
+        out : ndarray or scalar
+            Drawn samples from the parameterized hypergeometric distribution.
 
         See Also
         --------
@@ -4414,7 +4198,7 @@ cdef class RandomState:
         .. [2] Weisstein, Eric W. "Hypergeometric Distribution." From
                MathWorld--A Wolfram Web Resource.
                http://mathworld.wolfram.com/HypergeometricDistribution.html
-        .. [3] Wikipedia, "Hypergeometric-distribution",
+        .. [3] Wikipedia, "Hypergeometric distribution",
                http://en.wikipedia.org/wiki/Hypergeometric_distribution
 
         Examples
@@ -4439,10 +4223,15 @@ cdef class RandomState:
         cdef ndarray ongood, onbad, onsample
         cdef long lngood, lnbad, lnsample
 
-        lngood = PyInt_AsLong(ngood)
-        lnbad = PyInt_AsLong(nbad)
-        lnsample = PyInt_AsLong(nsample)
-        if not PyErr_Occurred():
+        ongood = <ndarray>PyArray_FROM_OTF(ngood, NPY_LONG, NPY_ARRAY_ALIGNED)
+        onbad = <ndarray>PyArray_FROM_OTF(nbad, NPY_LONG, NPY_ARRAY_ALIGNED)
+        onsample = <ndarray>PyArray_FROM_OTF(nsample, NPY_LONG, NPY_ARRAY_ALIGNED)
+
+        if ongood.shape == onbad.shape == onsample.shape == ():
+            lngood = PyInt_AsLong(ngood)
+            lnbad = PyInt_AsLong(nbad)
+            lnsample = PyInt_AsLong(nsample)
+
             if lngood < 0:
                 raise ValueError("ngood < 0")
             if lnbad < 0:
@@ -4454,12 +4243,6 @@ cdef class RandomState:
             return discnmN_array_sc(self.internal_state, rk_hypergeometric,
                                     size, lngood, lnbad, lnsample, self.lock)
 
-        PyErr_Clear()
-
-        ongood = <ndarray>PyArray_FROM_OTF(ngood, NPY_LONG, NPY_ARRAY_ALIGNED)
-        onbad = <ndarray>PyArray_FROM_OTF(nbad, NPY_LONG, NPY_ARRAY_ALIGNED)
-        onsample = <ndarray>PyArray_FROM_OTF(nsample, NPY_LONG,
-                                             NPY_ARRAY_ALIGNED)
         if np.any(np.less(ongood, 0)):
             raise ValueError("ngood < 0")
         if np.any(np.less(onbad, 0)):
@@ -4482,19 +4265,18 @@ cdef class RandomState:
 
         Parameters
         ----------
-        loc : float
-
-        scale : float > 0.
-
+        p : float or array_like of floats
+            Shape parameter for the distribution.  Must be in the range (0, 1).
         size : int or tuple of ints, optional
             Output shape.  If the given shape is, e.g., ``(m, n, k)``, then
-            ``m * n * k`` samples are drawn.  Default is None, in which case a
-            single value is returned.
+            ``m * n * k`` samples are drawn.  If size is ``None`` (default),
+            a single value is returned if ``p`` is a scalar.  Otherwise,
+            ``np.array(p).size`` samples are drawn.
 
         Returns
         -------
-        samples : ndarray or scalar
-                  where the values are all integers in  [0, n].
+        out : ndarray or scalar
+            Drawn samples from the parameterized logarithmic series distribution.
 
         See Also
         --------
@@ -4526,8 +4308,8 @@ cdef class RandomState:
                Journal of Animal Ecology, 12:42-58.
         .. [3] D. J. Hand, F. Daly, D. Lunn, E. Ostrowski, A Handbook of Small
                Data Sets, CRC Press, 1994.
-        .. [4] Wikipedia, "Logarithmic-distribution",
-               http://en.wikipedia.org/wiki/Logarithmic-distribution
+        .. [4] Wikipedia, "Logarithmic distribution",
+               http://en.wikipedia.org/wiki/Logarithmic_distribution
 
         Examples
         --------
@@ -4549,8 +4331,11 @@ cdef class RandomState:
         cdef ndarray op
         cdef double fp
 
-        fp = PyFloat_AsDouble(p)
-        if not PyErr_Occurred():
+        op = <ndarray>PyArray_FROM_OTF(p, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
+
+        if op.shape == ():
+            fp = PyFloat_AsDouble(p)
+
             if fp <= 0.0:
                 raise ValueError("p <= 0.0")
             if fp >= 1.0:
@@ -4558,9 +4343,6 @@ cdef class RandomState:
             return discd_array_sc(self.internal_state, rk_logseries, size, fp,
                                   self.lock)
 
-        PyErr_Clear()
-
-        op = <ndarray>PyArray_FROM_OTF(p, NPY_DOUBLE, NPY_ARRAY_ALIGNED)
         if np.any(np.less_equal(op, 0.0)):
             raise ValueError("p <= 0.0")
         if np.any(np.greater_equal(op, 1.0)):
@@ -4952,6 +4734,10 @@ cdef class RandomState:
 
         Modify a sequence in-place by shuffling its contents.
 
+        This function only shuffles the array along the first axis of a
+        multi-dimensional array. The order of sub-arrays is changed but
+        their contents remains the same.
+
         Parameters
         ----------
         x : array_like
@@ -4968,8 +4754,7 @@ cdef class RandomState:
         >>> arr
         [1 7 5 2 9 4 3 6 0 8]
 
-        This function only shuffles the array along the first index of a
-        multi-dimensional array:
+        Multi-dimensional arrays are only shuffled along the first axis:
 
         >>> arr = np.arange(9).reshape((3, 3))
         >>> np.random.shuffle(arr)
@@ -4979,33 +4764,56 @@ cdef class RandomState:
                [0, 1, 2]])
 
         """
-        cdef npy_intp i, j
+        cdef:
+            npy_intp i, j, n = len(x), stride, itemsize
+            char* x_ptr
+            char* buf_ptr
 
-        i = len(x) - 1
-
-        # Logic adapted from random.shuffle()
-        if isinstance(x, np.ndarray) and \
-           (x.ndim > 1 or x.dtype.fields is not None):
-            # For a multi-dimensional ndarray, indexing returns a view onto
-            # each row. So we can't just use ordinary assignment to swap the
-            # rows; we need a bounce buffer.
+        if type(x) is np.ndarray and x.ndim == 1 and x.size:
+            # Fast, statically typed path: shuffle the underlying buffer.
+            # Only for non-empty, 1d objects of class ndarray (subclasses such
+            # as MaskedArrays may not support this approach).
+            x_ptr = <char*><size_t>x.ctypes.data
+            stride = x.strides[0]
+            itemsize = x.dtype.itemsize
+            # As the array x could contain python objects we use a buffer
+            # of bytes for the swaps to avoid leaving one of the objects
+            # within the buffer and erroneously decrementing it's refcount
+            # when the function exits.
+            buf = np.empty(itemsize, dtype=np.int8) # GC'd at function exit
+            buf_ptr = <char*><size_t>buf.ctypes.data
+            with self.lock:
+                # We trick gcc into providing a specialized implementation for
+                # the most common case, yielding a ~33% performance improvement.
+                # Note that apparently, only one branch can ever be specialized.
+                if itemsize == sizeof(npy_intp):
+                    self._shuffle_raw(n, sizeof(npy_intp), stride, x_ptr, buf_ptr)
+                else:
+                    self._shuffle_raw(n, itemsize, stride, x_ptr, buf_ptr)
+        elif isinstance(x, np.ndarray) and x.ndim > 1 and x.size:
+            # Multidimensional ndarrays require a bounce buffer.
             buf = np.empty_like(x[0])
             with self.lock:
-                while i > 0:
+                for i in reversed(range(1, n)):
                     j = rk_interval(i, self.internal_state)
                     buf[...] = x[j]
                     x[j] = x[i]
                     x[i] = buf
-                    i = i - 1
         else:
-            # For single-dimensional arrays, lists, and any other Python
-            # sequence types, indexing returns a real object that's
-            # independent of the array contents, so we can just swap directly.
+            # Untyped path.
             with self.lock:
-                while i > 0:
+                for i in reversed(range(1, n)):
                     j = rk_interval(i, self.internal_state)
                     x[i], x[j] = x[j], x[i]
-                    i = i - 1
+
+    cdef inline _shuffle_raw(self, npy_intp n, npy_intp itemsize,
+                             npy_intp stride, char* data, char* buf):
+        cdef npy_intp i, j
+        for i in reversed(range(1, n)):
+            j = rk_interval(i, self.internal_state)
+            string.memcpy(buf, data + j * stride, itemsize)
+            string.memcpy(data + j * stride, data + i * stride, itemsize)
+            string.memcpy(data + i * stride, buf, itemsize)
 
     def permutation(self, object x):
         """

@@ -5,6 +5,7 @@ to document how deprecations should eventually be turned into errors.
 """
 from __future__ import division, absolute_import, print_function
 
+import datetime
 import sys
 import operator
 import warnings
@@ -12,7 +13,116 @@ import warnings
 import numpy as np
 from numpy.testing import (
     run_module_suite, assert_raises, assert_warns, assert_no_warnings,
-    assert_array_equal, assert_)
+    assert_array_equal, assert_, dec)
+
+try:
+    import pytz
+    _has_pytz = True
+except ImportError:
+    _has_pytz = False
+
+
+class _VisibleDeprecationTestCase(object):
+    # Just as warning: warnings uses re.match, so the start of this message
+    # must match.
+    message = ''
+
+    def setUp(self):
+        self.warn_ctx = warnings.catch_warnings(record=True)
+        self.log = self.warn_ctx.__enter__()
+
+        # Do *not* ignore other DeprecationWarnings. Ignoring warnings
+        # can give very confusing results because of
+        # http://bugs.python.org/issue4180 and it is probably simplest to
+        # try to keep the tests cleanly giving only the right warning type.
+        # (While checking them set to "error" those are ignored anyway)
+        # We still have them show up, because otherwise they would be raised
+        warnings.filterwarnings("always", category=np.VisibleDeprecationWarning)
+        warnings.filterwarnings("always", message=self.message,
+                                category=np.VisibleDeprecationWarning)
+
+    def tearDown(self):
+        self.warn_ctx.__exit__()
+
+    def assert_deprecated(self, function, num=1, ignore_others=False,
+                          function_fails=False,
+                          exceptions=(np.VisibleDeprecationWarning,),
+                          args=(), kwargs={}):
+        """Test if VisibleDeprecationWarnings are given and raised.
+
+        This first checks if the function when called gives `num`
+        VisibleDeprecationWarnings, after that it tries to raise these
+        VisibleDeprecationWarnings and compares them with `exceptions`.
+        The exceptions can be different for cases where this code path
+        is simply not anticipated and the exception is replaced.
+
+        Parameters
+        ----------
+        function : callable
+            The function to test
+        num : int
+            Number of VisibleDeprecationWarnings to expect. This should
+            normally be 1.
+        ignore_others : bool
+            Whether warnings of the wrong type should be ignored (note that
+            the message is not checked)
+        function_fails : bool
+            If the function would normally fail, setting this will check for
+            warnings inside a try/except block.
+        exceptions : Exception or tuple of Exceptions
+            Exception to expect when turning the warnings into an error.
+            The default checks for DeprecationWarnings. If exceptions is
+            empty the function is expected to run successfully.
+        args : tuple
+            Arguments for `function`
+        kwargs : dict
+            Keyword arguments for `function`
+        """
+        # reset the log
+        self.log[:] = []
+
+        try:
+            function(*args, **kwargs)
+        except (Exception if function_fails else tuple()):
+            pass
+
+        # just in case, clear the registry
+        num_found = 0
+        for warning in self.log:
+            if warning.category is np.VisibleDeprecationWarning:
+                num_found += 1
+            elif not ignore_others:
+                raise AssertionError(
+                        "expected DeprecationWarning but got: %s" %
+                        (warning.category,))
+        if num is not None and num_found != num:
+            msg = "%i warnings found but %i expected." % (len(self.log), num)
+            lst = [w.category for w in self.log]
+            raise AssertionError("\n".join([msg] + lst))
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", message=self.message,
+                                    category=np.VisibleDeprecationWarning)
+            try:
+                function(*args, **kwargs)
+                if exceptions != tuple():
+                    raise AssertionError(
+                            "No error raised during function call")
+            except exceptions:
+                if exceptions == tuple():
+                    raise AssertionError(
+                            "Error raised during function call")
+
+    def assert_not_deprecated(self, function, args=(), kwargs={}):
+        """Test if VisibleDeprecationWarnings are given and raised.
+
+        This is just a shorthand for:
+
+        self.assert_deprecated(function, num=0, ignore_others=True,
+                        exceptions=tuple(), args=args, kwargs=kwargs)
+        """
+        self.assert_deprecated(function, num=0, ignore_others=True,
+                        exceptions=tuple(), args=args, kwargs=kwargs)
 
 
 class _DeprecationTestCase(object):
@@ -50,11 +160,11 @@ class _DeprecationTestCase(object):
 
         Parameters
         ----------
-        f : callable
+        function : callable
             The function to test
         num : int
             Number of DeprecationWarnings to expect. This should normally be 1.
-        ignore_other : bool
+        ignore_others : bool
             Whether warnings of the wrong type should be ignored (note that
             the message is not checked)
         function_fails : bool
@@ -63,11 +173,11 @@ class _DeprecationTestCase(object):
         exceptions : Exception or tuple of Exceptions
             Exception to expect when turning the warnings into an error.
             The default checks for DeprecationWarnings. If exceptions is
-            empty the function is expected to run successfull.
+            empty the function is expected to run successfully.
         args : tuple
-            Arguments for `f`
+            Arguments for `function`
         kwargs : dict
-            Keyword arguments for `f`
+            Keyword arguments for `function`
         """
         # reset the log
         self.log[:] = []
@@ -88,7 +198,7 @@ class _DeprecationTestCase(object):
                         (warning.category,))
         if num is not None and num_found != num:
             msg = "%i warnings found but %i expected." % (len(self.log), num)
-            lst = [w.category for w in self.log]
+            lst = [str(w.category) for w in self.log]
             raise AssertionError("\n".join([msg] + lst))
 
         with warnings.catch_warnings():
@@ -375,15 +485,24 @@ class TestBooleanIndexShapeMismatchDeprecation():
              arr.__getitem__, (slice(None), index))
 
 
-class TestFullDefaultDtype(object):
-    """np.full defaults to float when dtype is not set.  In the future, it will
-    use the fill value's dtype.
-    """
+class TestDatetime64Timezone(_DeprecationTestCase):
+    """Parsing of datetime64 with timezones deprecated in 1.11.0, because
+    datetime64 is now timezone naive rather than UTC only.
 
-    def test_full_default_dtype(self):
-        assert_warns(FutureWarning, np.full, 1, 1)
-        assert_warns(FutureWarning, np.full, 1, None)
-        assert_no_warnings(np.full, 1, 1, float)
+    It will be quite a while before we can remove this, because, at the very
+    least, a lot of existing code uses the 'Z' modifier to avoid conversion
+    from local time to UTC, even if otherwise it handles time in a timezone
+    naive fashion.
+    """
+    def test_string(self):
+        self.assert_deprecated(np.datetime64, args=('2000-01-01T00+01',))
+        self.assert_deprecated(np.datetime64, args=('2000-01-01T00Z',))
+
+    @dec.skipif(not _has_pytz, "The pytz module is not available.")
+    def test_datetime(self):
+        tz = pytz.timezone('US/Eastern')
+        dt = datetime.datetime(2000, 1, 1, 0, 0, tzinfo=tz)
+        self.assert_deprecated(np.datetime64, args=(dt,))
 
 
 class TestNonCContiguousViewDeprecation(_DeprecationTestCase):
@@ -430,6 +549,89 @@ class TestInvalidOrderParameterInputForFlattenArrayDeprecation(_DeprecationTestC
         self.assert_deprecated(x.flatten, args=("FACK",))
 
 
+class TestArrayDataAttributeAssignmentDeprecation(_DeprecationTestCase):
+    """Assigning the 'data' attribute of an ndarray is unsafe as pointed
+     out in gh-7093. Eventually, such assignment should NOT be allowed, but
+     in the interests of maintaining backwards compatibility, only a Deprecation-
+     Warning will be raised instead for the time being to give developers time to
+     refactor relevant code.
+    """
+
+    def test_data_attr_assignment(self):
+        a = np.arange(10)
+        b = np.linspace(0, 1, 10)
+
+        self.message = ("Assigning the 'data' attribute is an "
+                        "inherently unsafe operation and will "
+                        "be removed in the future.")
+        self.assert_deprecated(a.__setattr__, args=('data', b.data))
+
+
+class TestLinspaceInvalidNumParameter(_DeprecationTestCase):
+    """Argument to the num parameter in linspace that cannot be
+    safely interpreted as an integer is deprecated in 1.12.0.
+
+    Argument to the num parameter in linspace that cannot be
+    safely interpreted as an integer should not be allowed.
+    In the interest of not breaking code that passes
+    an argument that could still be interpreted as an integer, a
+    DeprecationWarning will be issued for the time being to give
+    developers time to refactor relevant code.
+    """
+    def test_float_arg(self):
+        # 2016-02-25, PR#7328
+        self.assert_deprecated(np.linspace, args=(0, 10, 2.5))
+
+
+class TestBinaryReprInsufficientWidthParameterForRepresentation(_DeprecationTestCase):
+    """
+    If a 'width' parameter is passed into ``binary_repr`` that is insufficient to
+    represent the number in base 2 (positive) or 2's complement (negative) form,
+    the function used to silently ignore the parameter and return a representation
+    using the minimal number of bits needed for the form in question. Such behavior
+    is now considered unsafe from a user perspective and will raise an error in the future.
+    """
+
+    def test_insufficient_width_positive(self):
+        args = (10,)
+        kwargs = {'width': 2}
+
+        self.message = ("Insufficient bit width provided. This behavior "
+                        "will raise an error in the future.")
+        self.assert_deprecated(np.binary_repr, args=args, kwargs=kwargs)
+
+    def test_insufficient_width_negative(self):
+        args = (-5,)
+        kwargs = {'width': 2}
+
+        self.message = ("Insufficient bit width provided. This behavior "
+                        "will raise an error in the future.")
+        self.assert_deprecated(np.binary_repr, args=args, kwargs=kwargs)
+
+
+class TestNumericStyleTypecodes(_DeprecationTestCase):
+    """
+    Deprecate the old numeric-style dtypes, which are especially
+    confusing for complex types, e.g. Complex32 -> complex64. When the
+    deprecation cycle is complete, the check for the strings should be
+    removed from PyArray_DescrConverter in descriptor.c, and the
+    deprecated keys should not be added as capitalized aliases in
+    _add_aliases in numerictypes.py.
+    """
+    def test_all_dtypes(self):
+        deprecated_types = [
+            'Bool', 'Complex32', 'Complex64', 'Float16', 'Float32', 'Float64',
+            'Int8', 'Int16', 'Int32', 'Int64', 'Object0', 'Timedelta64',
+            'UInt8', 'UInt16', 'UInt32', 'UInt64', 'Void0'
+            ]
+        if sys.version_info[0] < 3:
+            deprecated_types.extend(['Unicode0', 'String0'])
+
+        for dt in deprecated_types:
+            self.assert_deprecated(np.dtype, exceptions=(TypeError,),
+                                   args=(dt,))
+
+
 class TestTestDeprecated(object):
     def test_assert_deprecated(self):
         test_case_instance = _DeprecationTestCase()
@@ -439,9 +641,11 @@ class TestTestDeprecated(object):
                       lambda: None)
 
         def foo():
-            warnings.warn("foo", category=DeprecationWarning)
+            warnings.warn("foo", category=DeprecationWarning, stacklevel=2)
 
         test_case_instance.assert_deprecated(foo)
+        test_case_instance.tearDown()
+
 
 if __name__ == "__main__":
     run_module_suite()

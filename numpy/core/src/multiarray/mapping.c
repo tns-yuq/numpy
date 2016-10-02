@@ -14,6 +14,7 @@
 #include "npy_import.h"
 
 #include "common.h"
+#include "ctors.h"
 #include "iterators.h"
 #include "mapping.h"
 #include "lowlevel_strided_loops.h"
@@ -662,7 +663,7 @@ prepare_index(PyArrayObject *self, PyObject *index,
         for (i = 0; i < curr_idx; i++) {
             if ((indices[i].type == HAS_FANCY) && indices[i].value > 0) {
                 if (indices[i].value != PyArray_DIM(self, used_ndim)) {
-                    static PyObject *warning;
+                    static PyObject *warning = NULL;
 
                     char err_msg[174];
                     PyOS_snprintf(err_msg, sizeof(err_msg),
@@ -803,12 +804,9 @@ get_view_from_index(PyArrayObject *self, PyArrayObject **view,
                 }
                 break;
             case HAS_SLICE:
-                if (slice_GetIndices((PySliceObject *)indices[i].object,
-                                     PyArray_DIMS(self)[orig_dim],
-                                     &start, &stop, &step, &n_steps) < 0) {
-                    if (!PyErr_Occurred()) {
-                        PyErr_SetString(PyExc_IndexError, "invalid slice");
-                    }
+                if (NpySlice_GetIndicesEx(indices[i].object,
+                                          PyArray_DIMS(self)[orig_dim],
+                                          &start, &stop, &step, &n_steps) < 0) {
                     return -1;
                 }
                 if (n_steps <= 0) {
@@ -1132,7 +1130,9 @@ array_assign_boolean_subscript(PyArrayObject *self,
             return -1;
         }
 
-        NPY_BEGIN_THREADS_NDITER(iter);
+        if (!needs_api) {
+            NPY_BEGIN_THREADS_NDITER(iter);
+        }
 
         do {
             innersize = *NpyIter_GetInnerLoopSizePtr(iter);
@@ -1156,7 +1156,9 @@ array_assign_boolean_subscript(PyArrayObject *self,
             }
         } while (iternext(iter));
 
-        NPY_END_THREADS;
+        if (!needs_api) {
+            NPY_END_THREADS;
+        }
 
         NPY_AUXDATA_FREE(transferdata);
         NpyIter_Deallocate(iter);
@@ -1290,7 +1292,7 @@ _get_field_view(PyArrayObject *arr, PyObject *ind, PyArrayObject **view)
 
         /* view the array at the new offset+dtype */
         Py_INCREF(fieldtype);
-        *view = (PyArrayObject*)PyArray_NewFromDescr(
+        *view = (PyArrayObject*)PyArray_NewFromDescr_int(
                                     Py_TYPE(arr),
                                     fieldtype,
                                     PyArray_NDIM(arr),
@@ -1298,7 +1300,7 @@ _get_field_view(PyArrayObject *arr, PyObject *ind, PyArrayObject **view)
                                     PyArray_STRIDES(arr),
                                     PyArray_BYTES(arr) + offset,
                                     PyArray_FLAGS(arr),
-                                    (PyObject *)arr);
+                                    (PyObject *)arr, 0, 1);
         if (*view == NULL) {
             return 0;
         }
@@ -1396,7 +1398,7 @@ _get_field_view(PyArrayObject *arr, PyObject *ind, PyArrayObject **view)
         view_dtype->fields = fields;
         view_dtype->flags = PyArray_DESCR(arr)->flags;
 
-        *view = (PyArrayObject*)PyArray_NewFromDescr(
+        *view = (PyArrayObject*)PyArray_NewFromDescr_int(
                                     Py_TYPE(arr),
                                     view_dtype,
                                     PyArray_NDIM(arr),
@@ -1404,7 +1406,7 @@ _get_field_view(PyArrayObject *arr, PyObject *ind, PyArrayObject **view)
                                     PyArray_STRIDES(arr),
                                     PyArray_DATA(arr),
                                     PyArray_FLAGS(arr),
-                                    (PyObject *)arr);
+                                    (PyObject *)arr, 0, 1);
         if (*view == NULL) {
             return 0;
         }
@@ -1426,6 +1428,7 @@ _get_field_view(PyArrayObject *arr, PyObject *ind, PyArrayObject **view)
             return 0;
         }
 
+        PyArray_CLEARFLAGS(*view, NPY_ARRAY_WARN_ON_WRITE);
         viewcopy = PyObject_CallFunction(copyfunc, "O", *view);
         if (viewcopy == NULL) {
             Py_DECREF(*view);
@@ -1434,6 +1437,9 @@ _get_field_view(PyArrayObject *arr, PyObject *ind, PyArrayObject **view)
         }
         Py_DECREF(*view);
         *view = (PyArrayObject*)viewcopy;
+
+        /* warn when writing to the copy */
+        PyArray_ENABLEFLAGS(*view, NPY_ARRAY_WARN_ON_WRITE);
         return 0;
     }
     return -1;
